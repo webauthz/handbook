@@ -285,7 +285,15 @@ application server. An example of a Grant Redirect URI is
 
 To make the request, the authorization server either redirects the user
 with the `Location` header in an HTTPS response, or directs the user to
-click on a link to continue. The link looks like this:
+click on a link to continue.
+
+The access denied link looks like this:
+
+```
+<grant_redirect_uri>?client_id=<client_id>&client_state=<client_state>&status=denied
+```
+
+The access granted link looks like this:
 
 ```
 <grant_redirect_uri>?client_id=<client_id>&client_state=<client_state>&grant_token=<grant_token>

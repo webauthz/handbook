@@ -73,7 +73,7 @@ Webauthz authorization requests.
 
 Discovery can start with a system administrator configuring a web application
 with a Webauthz Discovery URI, or it can be dynamic where the Webauthz Discovery
-URI is provided in response to a resource request, along with the HTTP status
+URI is provided in response to a resource [access](#access) request, along with the HTTP status
 code of 401 Unauthorized or 403 Forbidden.
 
 To discover the authorization server configuration, the application
@@ -555,15 +555,20 @@ Here is an example response:
 
 ```
 401 Unauthorized
-WWW-Authenticate: Bearer realm="example",
-  scope="read-contacts edit-contacts",
-  webauthz_discovery_uri="https://resource.example.com/webauthz.json",
-  path="/customer"
+WWW-Authenticate: Bearer realm=Example,
+  scope=read-contacts%20edit-contacts,
+  webauthz_discovery_uri=https%3A%2F%2Fresource.example.com%2Fwebauthz.json,
+  path=%2Fcustomer
 ```
 
 The presence of the `webauthz_discovery_uri` indicates the resource server
 implements Webauthz and the client SHOULD follow this specification to
 obtain an access token and retry the request with the access token.
+
+To make implementation easier, the attribute values MUST be URI-encoded.
+The URI-encoded values MAY be quoted or unquoted. For example, both
+`%2Fcustomer` and `"%2Fcustomer"` would be valid. Where a value is quoted,
+applications MUST remove quotes before URI-decoding the value.
 
 When the `webauthz_discovery_uri` auth-param
 attribute is present, the application SHOULD

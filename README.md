@@ -1146,10 +1146,10 @@ one resource server that has a built-in authorization server, and one applicatio
 
 You can run everything on your local system. Here are the steps:
 
-1. clone `test-resource-node-js`, then inside run `npm install` and `npm start`
+1. clone [test-resource-node-js](https://github.com/webauthz/test-resource-node-js), then inside run `npm install` and `npm start`
 2. visit the url shown in the output (probably "http://localhost:29001")
 3. pick a name for yourself and "login", then create a resource like "hello world"
-4. clone `test-app-node-js`, then inside run `npm install` and `npm start`
+4. clone [test-app-node-js](https://github.com/webauthz/test-app-node-js), then inside run `npm install` and `npm start`
 5. visit the url shown in the output (probably "http://localhost:29002")
 6. pick a name for yourself and "login", then paste the URL of the resource you created in step 3 and tap "access"
 7. you will be redirected to the resource website to approve the request, then back to the application to access the resource

@@ -193,14 +193,10 @@ present in `WWW-Authenticate` header value in the resource server response.
 The `optional_parameters` are optional application-specific
 key-value pairs to be included in the query string.
 
-The complete URI used to direct the user to the authorization server is
-called the `access_request_uri`. The application MUST store this value for
-use later in the [exchange](#exchange) step.
-
 To make the request with `curl`:
 
 ```
-curl '<link>'
+curl '<webauthz_request_uri>?client_id=<client_id>&client_state=<client_state>&realm=<realm>&scope=<scope>&path=<path>&<optional_parameters>'
 ```
 
 When the link is accessed by the user's browser, the authorization server response
@@ -360,12 +356,6 @@ may exchange a grant token that is intended only for that application.
 The exchange request MUST include the `grant_token` to reference the 
 permission(s) granted by the resource owner.
 
-The exchange request MUST include the `access_request_uri` to ensure
-that application knows the context for the grant, so the grant token
-and corresponding access token will not be substituted or used in the
-wrong request, to prevent access tokens from being accidentally disclosed
-to an unrelated resource.
-
 To make the request with `curl`:
 
 ```
@@ -374,7 +364,7 @@ curl \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer <client_token>' \
   -X POST \
-  --data '{"grant_token": "<grant_token>", "access_request_uri": "<access_request_uri>"}' \
+  --data '{"grant_token": "<grant_token>"}' \
   '<webauthz_exchange_uri>'
 ```
 
@@ -388,18 +378,17 @@ curl \
   -H 'Authorization: Bearer <client_token>' \
   -X POST \
   --data '' \
-  '<webauthz_exchange_uri>?grant_token=<grant_token>&access_request_uri=<access_request_uri>'
+  '<webauthz_exchange_uri>?grant_token=<grant_token>'
 ```
 
 Note that query string parameter values MUST be URL-encoded.
 
 The authorization server validates the `client_token`, then
-validates the `grant_token` and `access_request_uri`.
+validates the `grant_token`.
 
 The validation MUST include that the `client_token` is valid
-for a registered client, that the `grant_token` was issued to
-the same client, and that the `access_request_uri` matches the
-request for which the `grant_token` was issued.
+for a registered client, and that the `grant_token` was issued to
+the same client.
 
 If all the checks pass, the authorization server generates the
 `access_token` and responds to the application. 
@@ -465,7 +454,7 @@ curl \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer <client_token>' \
   -X POST \
-  --data '{"refresh_token": "<refresh_token>", "access_request_uri": "<access_request_uri>"}' \
+  --data '{"refresh_token": "<refresh_token>"}' \
   '<webauthz_exchange_uri>'
 ```
 
@@ -478,8 +467,18 @@ curl \
   -H 'Authorization: Bearer <client_token>' \
   -X POST \
   --data '' \
-  '<webauthz_exchange_uri>?refresh_token=<refresh_token>&access_request_uri=<access_request_uri>'
+  '<webauthz_exchange_uri>?refresh_token=<refresh_token>'
 ```
+
+The authorization server validates the `client_token`, then
+validates the `refresh_token`.
+
+The validation MUST include that the `client_token` is valid
+for a registered client, and that the `refresh_token` was issued to
+the same client.
+
+If all the checks pass, the authorization server generates the
+`access_token` and responds to the application. 
 
 The response format for a refresh exchange is the same as
 for the original exchange, and may look something like this:
@@ -511,8 +510,8 @@ depending on the failure. A missing or expired `client_token`
 would result in `401 Unauthorized`, indicating to the application
 that it needs to repeat the [registration](#registration) step
 and then start over with a new access [request](#request),
-whereas an invalid or expired `grant_token` or a mismatch with
-`access_request_uri` would result in `403 Forbidden`, indicating
+whereas an invalid or expired `grant_token` or `refresh_token`,
+would result in `403 Forbidden`, indicating
 to the application that the exchange is denied, and this is due
 either to a bug in the application code, or to an active attack
 in progress, and the request should not be repeated.

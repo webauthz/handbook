@@ -178,7 +178,7 @@ with the `Location` header in an HTTPS response, or directs the user to
 click on a link. The link looks like this:
 
 ```
-<webauthz_request_uri>?client_id=<client_id>&client_state=<client_state>&realm=<realm>&scope=<scope>&path=<path>&<optional_parameters>
+<webauthz_request_uri>?client_id=<client_id>&client_state=<client_state>&realm=<realm>&scope=<scope>&<optional_parameters>
 ```
 
 The `webauthz_request_uri` was or obtained via the [discovery](#discovery) step.
@@ -187,8 +187,12 @@ the [registration](#registration) step. The `client_state` is a value generated 
 the application to help it associate the subsequent grant, if it occurs, with the
 original access request. An application MUST generate a unique `client_state` value
 for each access request.
-The `realm`, `scope`, and `path` parameters MUST be included if they were
+The `realm` and `scope` parameters MUST be included if they were
 present in `WWW-Authenticate` or `Proxy-Authenticate` header value in the resource server response.
+
+An authorization server may serve multiple resources, so the `realm` parameter
+provides a namespace for the `scope` parameter to avoid a collision in scope names
+across various resources.
 
 The `optional_parameters` are optional application-specific
 key-value pairs to be included in the query string.
@@ -196,7 +200,7 @@ key-value pairs to be included in the query string.
 To make the request with `curl`:
 
 ```
-curl '<webauthz_request_uri>?client_id=<client_id>&client_state=<client_state>&realm=<realm>&scope=<scope>&path=<path>&<optional_parameters>'
+curl '<webauthz_request_uri>?client_id=<client_id>&client_state=<client_state>&realm=<realm>&scope=<scope>&<optional_parameters>'
 ```
 
 When the link is accessed by the user's browser, the authorization server response
@@ -250,7 +254,7 @@ or `Proxy-Authenticate` header.
 The `<permissions>` placeholder SHOULD be a human-readable
 format explaining what permissions the user will be granting the
 application, possibly including human-readable names for the `scope`
-and `path` attributes from the `WWW-Authenticate` 
+attribute from the `WWW-Authenticate` 
 or `Proxy-Authenticate` header.
 
 The `<optional_parameters>` placeholder SHOULD be a human-readable

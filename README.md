@@ -188,7 +188,7 @@ the application to help it associate the subsequent grant, if it occurs, with th
 original access request. An application MUST generate a unique `client_state` value
 for each access request.
 The `realm`, `scope`, and `path` parameters MUST be included if they were
-present in `WWW-Authenticate` header value in the resource server response.
+present in `WWW-Authenticate` or `Proxy-Authenticate` header value in the resource server response.
 
 The `optional_parameters` are optional application-specific
 key-value pairs to be included in the query string.
@@ -245,12 +245,13 @@ with the authorization server.
 
 The `<resource>` placeholder SHOULD be a human-readable format,
 possibly including the `realm` attribute from the `WWW-Authenticate`
-header.
+or `Proxy-Authenticate` header.
 
 The `<permissions>` placeholder SHOULD be a human-readable
 format explaining what permissions the user will be granting the
 application, possibly including human-readable names for the `scope`
-and `path` attributes from the `WWW-Authenticate` header.
+and `path` attributes from the `WWW-Authenticate` 
+or `Proxy-Authenticate` header.
 
 The `<optional_parameters>` placeholder SHOULD be a human-readable
 format for whatever optional parameters were specified by the
@@ -537,7 +538,12 @@ invalid `Authorization` header, or presents an invalid or expired
 `access_token`, the resource server MUST deny the request and reply
 with a status code of `401 Unauthorized`.
 
-If an access request contains an `Authorization` header with a valid
+If the resource server is a proxy, it would look for the
+`Proxy-Authorization` header and reply with
+a status code of `407 Proxy Authentication Required`.
+
+If an access request contains an `Authorization` or `Proxy-Authorization`
+header with a valid
 `access_token` but the token does not have permission to access the
 requested resource or perform the requested operation on that resource,
 the resource server MUST deny the request and reply with a status code
@@ -547,8 +553,22 @@ The `401 Unauthorized` response and the `403 Forbidden` response
 MUST contain a `WWW-Authenticate`
 header. The `WWW-Authenticate` header format is defined by
 [RFC 2617](https://tools.ietf.org/html/rfc2617) for HTTP/1.1 `Basic`
-and `Digest` authentication schemes, and is extended by
+and `Digest` authentication schemes,
+is updated by [RFC 7235](https://tools.ietf.org/html/rfc7235),
+and is extended by
 [RFC 6750](https://tools.ietf.org/html/rfc6750) with the `Bearer`
+scheme. We use the `Bearer` scheme here, and we further extend 
+it with two more auth-param attributes, `webauthz_discovery_uri`
+and `path`.
+
+The `407 Proxy Authentication Required` response
+MUST contain a `Proxy-Authenticate`
+header. The `Proxy-Authenticate` header format is defined by
+[RFC 2617](https://tools.ietf.org/html/rfc2617) for HTTP/1.1 `Basic`
+and `Digest` authentication schemes,
+is updated by [RFC 7235](https://tools.ietf.org/html/rfc7235),
+but is not mentioned by
+[RFC 6750](https://tools.ietf.org/html/rfc6750) for use with the `Bearer`
 scheme. We use the `Bearer` scheme here, and we further extend 
 it with two more auth-param attributes, `webauthz_discovery_uri`
 and `path`.
@@ -560,7 +580,7 @@ to the resource via the Webauthz protocol.
 The `error`, `error_description`, and `error_uri` attributes MAY be
 included as described in [RFC 6750](https://tools.ietf.org/html/rfc6750).
 
-Here is an example response:
+Here is an example response from an application:
 
 ```
 401 Unauthorized
@@ -568,6 +588,16 @@ WWW-Authenticate: Bearer realm=Example,
   scope=read-contacts%20edit-contacts,
   webauthz_discovery_uri=https%3A%2F%2Fresource.example.com%2Fwebauthz.json,
   path=%2Fcustomer
+```
+
+Here is an example response from a proxy:
+
+```
+407 Proxy Authentication Required
+Proxy-Authenticate: Bearer realm=Proxy,
+  scope=access-backend-app,
+  webauthz_discovery_uri=https%3A%2F%2Flogin.example.com%2Fwebauthz.json,
+  path=%2F
 ```
 
 The presence of the `webauthz_discovery_uri` indicates the resource server
@@ -596,6 +626,11 @@ The `path` attribute MUST be included to inform the application about
 URIs where it may pre-emptively include the access token in requests,
 namely in all requests to the same origin and matching path, which
 could be the exact path, or with a trailing "/", or any deeper path.
+
+NOTE: applications MUST take note of whether the authentication challenge
+was received via the `WWW-Authenticate` header or the `Proxy-Authenticate`
+header, so they can include the eventual access token in the corresponding
+request header, `Authorization` or `Proxy-Authorization`.
 
 # Configuration
 
@@ -856,11 +891,19 @@ of the resource with which they are used.
 Within an origin, access tokens SHOULD be associated to a path, so the application
 can pre-emptively send the access token with any request to that path or a sub-path.
 
+An application MUST also track whether a Webauthz challenge was received
+via a `401 Unauthorized` response or a `407 Proxy Authentication Required`
+response, and include the access token in the corresponding request header,
+either `Authorization` or `Proxy-Authorization`. It is possible that a single
+request will require both types of access tokens, so the lookup and token management
+for resource and proxy authorization should be performed independently.
+
 For example:
 
 1. An application
    makes a request to "https://example1.com/customer/profile" and the server responds
-   with a `WWW-Authenticate` header that includes a `realm` attribute with the value
+   with a `WWW-Authenticate` or `Proxy-Authenticate` header
+   that includes a `realm` attribute with the value
    "Customers", and a `path` attribute with the value "/customer".
    When the application obtains an access token, it is associated
    with the origin "https://example1.com" and the path "/customer". The same
@@ -869,8 +912,9 @@ For example:
 2. The application makes a request to "https://example1.com/directory",
    which has the same origin but a different path that does not match "/profile",
    so the application does NOT include
-   the access token. The the server responds with a `WWW-Authenticate` header that 
-   includes a `realm` attribute with the value "Employees".
+   the access token. The the server responds
+   with a `WWW-Authenticate` or `Proxy-Authenticate` header
+   that includes a `realm` attribute with the value "Employees".
    The application requests an access token for this,
    and the access token is associated with the origin "https://example1.com" and the
    path "/directory". So the application has two different
@@ -882,8 +926,9 @@ For example:
    is the same, and the path "/customer/profile/contacts" matches the path associated to the
    access token of "/customer" and is valid for any deeper paths.
    Let's say that accessing the contacts requires an additional permission over what was
-   originally granted to the application, so the resource server responds with
-   a `WWW-Authenticate` header that includes a new `scope` attribute with a value that
+   originally granted to the application, so the resource server responds
+   with a `WWW-Authenticate` or `Proxy-Authenticate` header
+   that includes a new `scope` attribute with a value that
    wasn't originally in the `scope` attribute in step 1.
    The application obtains an access token that is associated with
    the same origin "https://example1.com", the same path "/customer", and now has
@@ -1137,7 +1182,8 @@ an inter-process communication mechanism on the user's operating system.
 
 ## Path matching for pre-emptively sending access tokens
 
-The inclusion of the `path` attribute in the `WWW-Authenticate` response header,
+The inclusion of the `path` attribute in the `WWW-Authenticate` or
+`Proxy-Authenticate` response header,
 and its use by the application to determine where the access token may be sent
 pre-emptively, is a small improvement over [RFC 2617](https://tools.ietf.org/html/rfc2617),
 which assumes that "all paths at or deeper than [the same request URI]

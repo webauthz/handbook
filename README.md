@@ -153,14 +153,55 @@ Content-Type: application/json
 }
 ```
 
-The authorization server SHOULD NOT allow clients to update their registration
-details. If the application needs to change its `client_name` or
-`grant_redirect_uri`, it can submit a new registration request and the
-authorization server SHOULD respond with a new set of `client_id` and
-`<client_token>`. This recommendation may result in the occasional
-re-authorization, but will avoid surprising the user or system administrator
-with unrecognized application names and URIs in the system (from clients
-that were approved earlier using different values).
+## Registration update
+
+This section describes a feature that is not a part of the routine
+authorization sequence.
+
+Sometimes an application's `client_name`, `grant_redirect_uri`, or other
+registration detail may change, and the application needs to update the
+authorization server with the new information.
+
+The authorization server SHOULD allow applications to submit an
+authenticated registration request to update registration details. The
+authenticated registration request is the same as the original described
+above, with the addition of an `Authorization` header.
+
+To make the request with `curl`:
+
+```
+curl \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <client_token>' \
+  -X POST \
+  --data '{"client_name": "<client_name>", "grant_redirect_uri": "<grant_redirect_uri>"}' \
+  '<webauthz_register_uri>'
+```
+
+The authorization
+server SHOULD keep track of changes to `client_name`, so when a resource
+owner reviews existing authorizations, if they don't recognize an
+application they can see that they previously approved it under a different
+name. The authorization server SHOULD keep track of changes to other registration
+details in the same way. The authorization server SHOULD allow changes to
+the path or query parameters of `grant_redirect_uri`.
+
+The authorization server MUST NOT allow applications to update the origin
+component of the `grant_redirect_uri`.
+
+If an application needs to change
+its scheme, domain, or port number, it can submit a new registration request
+to receive a new set of `client_id` and `<client_token>`. Alternatively, an
+application may establish its own redirect from the previous
+origin to the new origin to avoid a new registration.
+
+The HTTPS response should look something like this:
+
+```
+HTTP/1.1 204 No Content
+```
+
 
 ## Request
 

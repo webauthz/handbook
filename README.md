@@ -252,6 +252,16 @@ The authorization server MUST generate and include a request identifier
 in the URL so it can recognize the user when the user is redirected.
 
 The authorization server responds to the client with the redirect URL.
+If the redirect URL will expire, or contains a unique identifier referencing an
+access request record that will expire, the response MUST include a `redirect_max_seconds`
+property indicating when this happens. This enables applications to present the
+redirect link to users for a limited time and then hide it, to avoid sending the
+user to the authorization server with an invalid link.
+
+Alternatively,
+to avoid the need to keep track of how long the `access_redirect_uri` is valid,
+applications MAY show the user their own link to request access, so they make
+this request and redirect the user only when the user is ready to be redirected.
 
 The HTTPS response should look something like this:
 
@@ -260,7 +270,8 @@ HTTP/1.1 200 OK
 Content-Type: application/json
 
 {
-  "redirect": "<access_request_uri>"
+  "redirect": "<access_request_uri>",
+  "redirect_max_seconds": "<redirect_max_seconds>"
 }
 ```
 

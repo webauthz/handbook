@@ -1181,21 +1181,22 @@ The authorization code flow in OAuth 2.0 is the inspiration for
 Webauthz, so if you're familiar with it, you'll recognize these
 five steps:
 
-1. Registration. The client (website or application) registers with the authorization server
-   to obtain a `client_id` and `client_token`
+1. Registration. The client (website or application) registers with the
+   authorization server to obtain a `client_id` and `client_token`
 
-2. Request. The client redirects the user to the authorization server with a request
-   that includes the `client_id`
+2. Request. The client redirects the user to the authorization server
+   with an access request; the request identifies the `client_id` and
+   specifies the requested access `scope` for an authorization `realm`
 
 3. Prompt. The authorization server prompts the user to allow or deny the request
 
 4. Grant. The authorization server redirects the user to the client with a temporary
    `grant_token` ("authorization code" in OAuth 2.0)
 
-5. Exchange. The client exchanges the temporary `grant_token` for an `access_token`
-   that can be used to make requests to the resource server;
-   this also requires the `client_id` and `client_token` to 
-   ensure only the original client gets the `access_token`
+5. Exchange. The client exchanges the temporary `grant_token` for an
+   `access_token` that can be used to make requests to the resource server;
+   this request is authenticated using the `client_token` to ensure only the
+   original client gets the `access_token` and `refresh_token`
 
 After the five steps are complete, the client has an authorization token that
 it can use to make requests to the resource server.

@@ -152,6 +152,19 @@ and store the `client_id` and the `client_token_digest` together with
 the `client_name` and `grant_redirect_uri` provided by the client,
 and then respond to the client with these two generated values.
 
+The authorization server may allow automatic client registrations or require
+an approval process for new client registrations.
+
+Where an authorization server
+allows automatic client registration, it responds to a valid registration request
+with `client_id`, `client_token`, and `client_token_max_seconds`.
+
+Where an authorization server requires an approval process for new client
+registrations, it adds `redirect` and `redirect_max_seconds` to the response.
+This informs the client that
+it must redirect its administrator to the provided URL to complete the registration
+process.
+
 The HTTPS response should look something like this:
 
 ```
@@ -172,6 +185,13 @@ The response object SHALL include the following keys:
   authorization server APIs
 * `client_token_max_seconds` indicates the length of time the `client_token`
   is valid
+
+The response object MAY include the following keys:
+
+* `redirect` is a URL to which the client must redirect the administrator to complete
+  the registration request
+* `redirect_max_seconds` is an integer indicating the number of seconds that the
+  `redirect` link is valid
 
 Clients SHOULD store the registration date and `client_token_max_seconds` value,
 or immediately compute and store the client token expiration date. Clients SHOULD
@@ -311,7 +331,7 @@ The response object MAY include the following keys:
 
 * `redirect_max_seconds` is an integer indicating the number of seconds that the
   `redirect` link is valid
-  
+
 The `redirect_max_seconds` key allows the authorization server to issue time-limited
 tokens in that URL. If this key is undefined, or is present with a `null` value,
 the redirect link does not expire. A negative or zero value is invalid. Some clients

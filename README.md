@@ -160,7 +160,8 @@ Content-Type: application/json
 
 {
   "client_id": "<client_id>",
-  "client_token": "<client_token>"
+  "client_token": "<client_token>",
+  "client_token_max_seconds": "<client_token_max_seconds>"
 }
 ```
 
@@ -169,6 +170,14 @@ The response object SHALL include the following keys:
 * `client_id` is a unique client identifier assigned to this client
 * `client_token` is a bearer token that authorizes the client to use the
   authorization server APIs
+* `client_token_max_seconds` indicates the length of time the `client_token`
+  is valid
+
+Clients SHOULD store the registration date and `client_token_max_seconds` value,
+or immediately compute and store the client token expiration date. Clients SHOULD
+use the [Exchange](#exchange) API to refresh the client token *before* it expires
+to avoid having to register as a new client or require human intervention to
+extend or replace its client token.
 
 ## Registration update
 

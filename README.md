@@ -497,13 +497,10 @@ in the exchange step.
 
 ## Exchange
 
-The fourth step of the authorization routine is for the application
-to exchange the `grant_token` for an `access_token`. This is
-done because the `grant_token` may be stored in the user's browser
-history or in other non-trusted areas due to being passed between
-the browser and a mobile or desktop application on the user's system,
-and also because the `access_token` may be very large and we want to
-avoid relying on clients and servers to handle very large URLs.
+The exchange API is used in the following ways:
+
+* to exchange the `grant_token` for an `access_token`
+* to refresh the `access_token`
 
 If the Webauthz Exchange URI scheme is `https`, the application sends
 an HTTPS POST request. An example of an Webauthz Exchange URI is
@@ -511,7 +508,17 @@ an HTTPS POST request. An example of an Webauthz Exchange URI is
 
 The exchange request MUST include an `Authorization` header with the
 application's `client_token` so that no other party
-may exchange a grant token that is intended only for that application.
+may exchange a token that is assigned to that client.
+
+### Grant token
+
+The fourth step of the authorization routine is for the application
+to exchange the `grant_token` for an `access_token`. This is
+done because the `grant_token` may be stored in the user's browser
+history or in other non-trusted areas due to being passed between
+the browser and a mobile or desktop application on the user's system,
+and also because the `access_token` may be very large and we want to
+avoid relying on clients and servers to handle very large URLs.
 
 The exchange request MUST include the `grant_token` to reference the 
 permission(s) granted by the resource owner.
@@ -530,7 +537,6 @@ curl \
 
 Alternatively, the request body may be empty and the parameters
 may be appended to the query string portion of the `webauthz_exchange_uri`:
-
 
 ```
 curl \
@@ -566,8 +572,6 @@ Content-Type: application/json
 {
   "access_token": "<access_token>",
   "access_token_max_seconds": <access_token_max_seconds>,
-  "refresh_token": "<refresh_token>",
-  "refresh_token_max_seconds": <refresh_token_max_seconds>
 }
 ```
 
@@ -583,10 +587,13 @@ The response object SHOULD include the following keys:
 The application SHOULD store the `access_token` somewhere
 safe for subsequent use.
 
-Where the response includes the `refresh_token`, the application
-SHOULD store the `refresh_token` somewhere safe for subsequent
-use and associate it to the `access_token`, because it is only
-valid to refresh that specific `access_token`.
+The format of `access_token_max_seconds`
+is a non-negative integer, specifying the number of seconds that
+token is valid since the moment it was issued. Applications SHOULD
+convert this to their preferred time zone and store the computed
+timestamp, or they should store the current timestamp when they received
+the token along with the max seconds value and compute the expiration
+period later.
 
 Where the response includes the `access_token_max_seconds` attribute,
 the application SHOULD store its value directly or compute and store the
@@ -595,30 +602,30 @@ make resource access requests with the access token after
 `access_token_max_seconds` have passed. Clients can refresh
 their expired access tokens using the [Exchange](#exchange) API.
 
-Where the exchange response includes
-a `refresh_token`, the application SHOULD attempt to refresh the
+The application SHOULD attempt to refresh the
 access token some time before it expires to avoid an extra request
 to the resource where its access is denied with the expired
 `access_token`.
 
-Where the response includes the `refresh_token_max_seconds` attribute,
-the application SHOULD store it directly or compute and store the
-corresponding future timestamp. The application SHOULD NOT
-make refresh exchange requests with the refresh token after
-`refresh_token_max_seconds` have passed. When the access token and
-refresh token have both expired, the application SHOULD make
-a new [request](#request) for further access.
+If any of the checks fail, the authorization server generates
+a response with the `401 Unauthorized` or `403 Forbidden`,
+depending on the failure. A missing or expired `client_token`
+would result in `401 Unauthorized`, indicating to the application
+that it needs to repeat the [registration](#registration) step
+and then start over with a new access [request](#request),
+whereas an invalid or expired `grant_token`
+would result in `403 Forbidden`, indicating
+to the application that the exchange is denied, and this is due
+either to a bug in the application code, or to an active attack
+in progress, and the request should not be repeated.
 
-The format of `access_token_max_seconds` and `refresh_token_max_seconds`
-is a non-negative integer, specifying the number of seconds that
-token is valid since the moment it was issued. Applications SHOULD
-convert this to their preferred time zone and store the computed
-timestamp, or they should store the current timestamp when they received
-the token along with the max seconds value and compute the expiration
-period later.
+When the client receives a `403 Forbidden` response, the client SHOULD
+inform the user and start a new access request for the resource.
+
+### Access token
 
 To refresh an access token, the application repeats the exchange
-request but uses the `refresh_token` instead of the `grant_token`:
+request but uses the `access_token` instead of the `grant_token`:
 
 ```
 curl \
@@ -626,7 +633,7 @@ curl \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer <client_token>' \
   -X POST \
-  --data '{"refresh_token": "<refresh_token>"}' \
+  --data '{"access_token": "<access_token>"}' \
   '<webauthz_exchange_uri>'
 ```
 
@@ -639,20 +646,26 @@ curl \
   -H 'Authorization: Bearer <client_token>' \
   -X POST \
   --data '' \
-  '<webauthz_exchange_uri>?refresh_token=<refresh_token>'
+  '<webauthz_exchange_uri>?access_token=<access_token>'
 ```
 
 The authorization server validates the `client_token`, then
-validates the `refresh_token`.
+validates the `access_token`. 
 
 The validation MUST include that the `client_token` is valid
-for a registered client, and that the `refresh_token` was issued to
+for a registered client, and that the `access_token` was issued to
 the same client.
 
-If all the checks pass, the authorization server generates the
+An authorization server MAY exchange
+an expired access token for a new one if the underlying permission
+has not expired. This is decided by the authorization server implementation.
+An authorization server MAY reject an exchange request for an expired
+access token.
+
+If all the checks pass, the authorization server generates a new
 `access_token` and responds to the application. 
 
-The response format for a refresh exchange is the same as
+The response format for an access token exchange is the same as
 for the original exchange, and may look something like this:
 
 ```
@@ -662,18 +675,15 @@ Content-Type: application/json
 {
   "access_token": "<access_token>",
   "access_token_max_seconds": <access_token_max_seconds>,
-  "refresh_token": "<refresh_token>",
-  "refresh_token_max_seconds": <refresh_token_max_seconds>
 }
 ```
 
-Where the `refresh_token` is included in the exchange response,
-the application MUST replace its stored `refresh_token` with the
-new `refresh_token`, and use the new `refresh_token` in subsequent
-refresh exchange requests.
+The application SHOULD replace its old access token with the new
+access token and compute the new expiration date to schedule the next
+refresh.
 
 The authorization server SHOULD only
-accept refresh exchange requests with the most recent `refresh_token`
+accept access oktne exchange requests with the most recent `access_token`
 value.
 
 If any of the checks fail, the authorization server generates
@@ -682,11 +692,14 @@ depending on the failure. A missing or expired `client_token`
 would result in `401 Unauthorized`, indicating to the application
 that it needs to repeat the [registration](#registration) step
 and then start over with a new access [request](#request),
-whereas an invalid or expired `grant_token` or `refresh_token`,
+whereas an invalid or expired `access_token`
 would result in `403 Forbidden`, indicating
 to the application that the exchange is denied, and this is due
 either to a bug in the application code, or to an active attack
 in progress, and the request should not be repeated.
+
+When the client receives a `403 Forbidden` response, the client SHOULD
+inform the user and start a new access request for the resource.
 
 ## Access
 
@@ -896,67 +909,6 @@ Generated by the authorization server in response to an application
 token exchange request. The application must provide a valid
 grant token as the input to the exchange.
 
-## Refresh token
-
-When using simple tokens,
-the resource server can revoke the access tokens granted to any
-application by deleting tokens or setting their expiration time to
-zero.
-
-When using self-encoded tokens, revocation is not directly possible
-since the tokens are verified by a cryptographic key and not by
-looking up anything in a database or remote server. This is because
-people who use self-encoded tokens do it with the intent to avoid such
-lookups on every request. Refresh tokens are used in OAuth 2.0 as
-a workaround, essentially allowing self-encoded tokens to be used for
-a limited time without a database lookup, and then a more occasional
-use of the refresh token (with a database lookup) to request a new
-access token to be issued. The use of the refresh token provides the
-opportunity to revoke access by refusing to issue a new access token.
-
-However, there is another reason to implement a refresh functionality,
-which is applicable to both token types, and that is simply
-to limit the amount of time that attackers have to
-mount an attack on the token.
-
-An implementation may limit the validity period of a token
-and require the application to obtain a replacement token at the end of
-that validity period. This is indicated by the `refresh_token` attribute
-provided to the application in the [exchange](#exchange) response.
-
-Where an exchange response includes `refresh_token`, the application MAY
-repeat the exchange step to obtain a new access token. The authorization
-server MAY refuse to issue a new access token until the `access_token`
-expires, or within a window of time
-around the access token expiration date to allow for clock difference and a little
-planning to avoid service interruptions.
-
-The authorization server MAY include a `access_token_max_seconds` value
-in the exchange response to indicate to the application when the
-access token becomes invalid. Applications SHOULD avoid making a resource
-request with the `access_token` after that date.
-
-An application MAY pre-emptively refresh the access token before the
-`access_token_max_seconds` have passed.
-
-The authorization server MAY include a `refresh_token_max_seconds` value
-in the exchange response to indicate to the application when the
-refresh token becomes invalid. Applications SHOULD avoid making a resource
-request with the `refresh_token` after that date.
-
-To obtain a new access token, an application makes an [exchange](#exchange)
-request to the authorization server with the `refresh_token`
-instead of the `grant_token`. The [exchange](#exchange) request
-MUST include an `Authorization` header with the application's client token.
-
-The authorization server response to an exchange request MAY
-include a new refresh token to use in addition to a new access token.
-The new access token MAY have different scopes than the prior access token.
-
-We use a separate `refresh_token` instead of the original `grant_token`
-for the renewal capability because of the possibility that the
-`grant_token` is visible to outside parties during the redirect.
-
 # Token format
 
 The format of the token is unspecified because it is opaque
@@ -1124,6 +1076,66 @@ for the new set of permission provides simplicity for the application, which alw
 replaces prior access tokens with new access tokens for the same origin and path.
 To enforce that the old token is not used, an authorization server could revoke the
 original access token when issuing a replacement access token.
+
+## Refresh access tokens
+
+To limit the amount of time that attackers have to mount an attack on an
+access token, the authorization server may issue access tokens with a relatively
+short validity period. The client may refresh the access tokens using the
+[Exchange](#exchange) API to continue accesing the resource.
+
+When using lookup tokens,
+the resource server can revoke the access tokens granted to any
+application by deleting tokens or setting their expiration time to
+zero.
+
+When using self-encoded tokens, revocation is not directly possible
+since the tokens are verified by a cryptographic key and not by
+looking up anything in a database or remote server. This is because
+people who use self-encoded tokens do it with the intent to avoid such
+lookups on every request.
+
+In OAuth 2.0, refresh tokens are used as
+a workaround, essentially allowing self-encoded tokens to be used for
+a limited time without a database lookup, and then a more occasional
+use of the refresh token (with a database lookup) to request a new
+access token to be issued. The use of the refresh token provides the
+opportunity to revoke access by refusing to issue a new access token.
+
+In Webauthz, each client has its own client token which is used to
+authorize the refresh of an access token. The [exchange](#exchange) API
+allows the client to exchange an old access token for a new access token
+by providing the old access token. The authorization server may limit the
+number of times a client refreshes a particular access token, or it may
+keep track of a maximum refresh date beyond which a particular access token
+may not be refreshed. These limits may be stored in the access token
+(if it is self-encoded) or in the corresponding record (when using database
+lookups) or in a separate underlying permission.
+
+An implementation may limit the validity period of a token
+and require the application to obtain a replacement token at the end of
+that validity period. This is indicated by the `access_token_max_seconds` attribute
+provided to the application in the [exchange](#exchange) response.
+
+Where an exchange response includes `access_token_max_seconds`, the application MAY
+repeat the exchange step to obtain a new access token. The authorization
+server MAY refuse to issue a new access token until the `access_token`
+expires, or within a window of time
+around the access token expiration date to allow for clock difference and a little
+planning to avoid service interruptions.
+
+Applications SHOULD avoid making a resource
+request with the `access_token` after the expiration date computed with `access_token_max_seconds`.
+
+An application MAY pre-emptively refresh the access token before the
+`access_token_max_seconds` have passed.
+
+To obtain a new access token, an application makes an [exchange](#exchange)
+request to the authorization server with the `access_token`
+instead of the `grant_token`. The [exchange](#exchange) request
+MUST include an `Authorization` header with the application's client token.
+
+The new access token MAY have different scopes or permissions than the prior access token.
 
 ## Access control in resource server
 

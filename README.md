@@ -81,7 +81,7 @@ needs to know only one URI:
 
 * Webauthz Discovery URI
 
-If the URI scheme is `https`, the client can retrieve the two
+If the URI scheme is `https`, the client can retrieve the
 configuration settings with an HTTPS GET request. An example of
 a Webauthz Discovery URI is "https://resource.example.com/webauthz.json".
 
@@ -105,9 +105,20 @@ Content-Type: application/json
 {
   "webauthz_register_uri": "https://resource.example.com/webauthz/register",
   "webauthz_request_uri": "https://resource.example.com/webauthz/request",
-  "webauthz_exchange_uri": "https://resource.example.com/webauthz/exchange",
+  "webauthz_exchange_uri": "https://resource.example.com/webauthz/exchange"
 }
 ```
+
+The response object SHALL include values for the following keys:
+
+* `webauthz_register_uri` indicates where a client can register to receive a
+  client ID and client token (see [Registration](#registration))
+* `webauthz_request_uri` indicates where a client can initiate access requests
+  to eventually obtain access tokens for resources (see [Request](#request))
+* `webauthz_exchange_uri` indicates where a client can exchange grant tokens
+  for access tokens (see [Exchange](#exchange))
+
+The values are determined by the authorization server administrator.
 
 The application should store this information. The application SHOULD
 check to see if the discovery settings have changed each time it receives a
@@ -152,6 +163,12 @@ Content-Type: application/json
   "client_token": "<client_token>"
 }
 ```
+
+The response object SHALL include the following keys:
+
+* `client_id` is a unique client identifier assigned to this client
+* `client_token` is a bearer token that authorizes the client to use the
+  authorization server APIs
 
 ## Registration update
 
@@ -271,9 +288,30 @@ Content-Type: application/json
 
 {
   "redirect": "<access_request_uri>",
-  "redirect_max_seconds": "<redirect_max_seconds>"
+  "redirect_max_seconds": <redirect_max_seconds>
 }
 ```
+
+The response object SHALL include the following keys:
+
+* `redirect` is a URL to which the client must redirect the user to continue
+  the access request (typically a site where the user will authenticate and approve
+  the access request)
+
+The response object MAY include the following keys:
+
+* `redirect_max_seconds` is an integer indicating the number of seconds that the
+  `redirect` link is valid
+  
+The `redirect_max_seconds` key allows the authorization server to issue time-limited
+tokens in that URL. If this key is undefined, or is present with a `null` value,
+the redirect link does not expire. A negative or zero value is invalid. Some clients
+may automatically redirect the user when the `redirect` link is received. Other clients
+may display a button for the user to continue when they are ready. In this case,
+the clients can use the `redirect_max_seconds` value to inform the user of how much
+time they have to click on the link. Clients could automatically disable the link when
+it expires, or react to an expired link by automatically starting a new request and then
+automatically redirecting the user (since the user indicated they are ready to continue).
 
 If the Access Request URI scheme is `https`, the application redirects the user
 to the authorization server by providing the user's browser with a
@@ -504,6 +542,15 @@ Content-Type: application/json
 }
 ```
 
+The response object SHALL include the following keys:
+
+* `access_token` is the bearer token that authorizes requests for the resource
+
+The response object SHOULD include the following keys:
+
+* `access_token_max_seconds` is the number of seconds the access token
+  is valid
+
 The application SHOULD store the `access_token` somewhere
 safe for subsequent use.
 
@@ -516,7 +563,10 @@ Where the response includes the `access_token_max_seconds` attribute,
 the application SHOULD store its value directly or compute and store the
 corresponding future timestamp. The application SHOULD NOT
 make resource access requests with the access token after
-`access_token_max_seconds` have passed. Where the exchange response includes
+`access_token_max_seconds` have passed. Clients can refresh
+their expired access tokens using the [Exchange](#exchange) API.
+
+Where the exchange response includes
 a `refresh_token`, the application SHOULD attempt to refresh the
 access token some time before it expires to avoid an extra request
 to the resource where its access is denied with the expired

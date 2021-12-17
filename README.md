@@ -7,9 +7,9 @@ Webauthz is a token-based authorization protocol that is a simpler
 replacement for OAuth 2.0.
 
 Webauthz contains only one sequence, or "flow", which is comparable
-to the OAuth 2.0 "authorization code" flow. Webauthz adds
-a discovery mechanism and a path matching mechanism that are not
-found in OAuth 2.0.
+to the OAuth 2.0 "authorization code" flow. Webauthz adds features
+not found in OAuth 2.0, such as a authorization server discovery and
+path matching.
 
 The benefit of this work is that Webauthz implementations are simpler
 to understand and easier to maintain than OAuth 2.0, and application
@@ -24,13 +24,13 @@ logged in, or in allowing a mail client to access the user's mailbox
 on a remote server using some authentication system other than passwords.
 
 More abstractly, you can use Webauthz where a website or application
-needs to access a resource the user controls in a limited way,
+needs to access a user's resource on another server in a limited way,
 without obtaining complete control over it, and
 is able to either redirect the user or open a window to to allow the
 user to approve access to the resource.
 
 Unlike OAuth 2.0, you don't need to make long-term choices such as which
-flow to use, or worry about whether you need to implement alternative
+flow to use, or consider whether you need to implement alternative
 flows for different clients. When using Webauthz, there is only one
 implementation so you can pick up the Webauthz libraries and start
 integrating them immediately, and things will just work.

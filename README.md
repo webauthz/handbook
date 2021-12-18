@@ -142,14 +142,14 @@ curl \
   -H 'Accept: application/json' \
   -H 'Content-Type: application/json' \
   -X POST \
-  --data '{"client_name": "<client_name>", "grant_redirect_uri": "<grant_redirect_uri>"}' \
+  --data '{"client_name": "<client_name>", "client_domain": "<client_domain>"}' \
   '<webauthz_register_uri>'
 ```
 
 The authorization server should generate a random `client_id` and
 `client_token`, compute the `client_token_digest` from the `client_token`,
 and store the `client_id` and the `client_token_digest` together with
-the `client_name` and `grant_redirect_uri` provided by the client,
+the `client_name` and `client_domain` provided by the client,
 and then respond to the client with these two generated values.
 
 The authorization server may allow automatic client registrations or require
@@ -204,7 +204,7 @@ extend or replace its client token.
 This section describes a feature that is not a part of the routine
 authorization sequence.
 
-Sometimes an application's `client_name`, `grant_redirect_uri`, or other
+Sometimes an application's `client_name`, `client_domain`, or other
 registration detail may change, and the application needs to update the
 authorization server with the new information.
 
@@ -221,7 +221,7 @@ curl \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer <client_token>' \
   -X POST \
-  --data '{"client_name": "<client_name>", "grant_redirect_uri": "<grant_redirect_uri>"}' \
+  --data '{"client_name": "<client_name>", "client_domain": "<client_domain>"}' \
   '<webauthz_register_uri>'
 ```
 
@@ -230,11 +230,11 @@ server SHOULD keep track of changes to `client_name`, so when a resource
 owner reviews existing authorizations, if they don't recognize an
 application they can see that they previously approved it under a different
 name. The authorization server SHOULD keep track of changes to other registration
-details in the same way. The authorization server SHOULD allow changes to
-the path or query parameters of `grant_redirect_uri`.
+details in the same way.
 
-The authorization server MUST NOT allow applications to update the origin
-component of the `grant_redirect_uri`.
+Where an authorization server requires domain verification for new client registration,
+the authorization server SHOULD require domain verification for the a new
+`client_domain` before make the change effective.
 
 If an application needs to change
 its scheme, domain, or port number, it can submit a new registration request
@@ -1340,6 +1340,40 @@ work hours compared to non-work hours.
 > the method presented above only requires additional implementation in the
 > authorization server and is usable with any Webauthz-compatible resource server.
 
+## Domain verification
+
+The authorization server SHOULD require domain verification for the
+`client_domain`.  The verification is currently out of scope for this specification,
+but it could be done automatically via an ACME DNS challenge or interactively
+using the `redirect` feature.
+
+Domain verification does not make sense for all clients. For example, a client
+application that is a mobile or desktop application may not have an associated domain
+at all. In that case, the client MUST NOT provide a `client_domain` value and
+the authorization server SHOULD allow the client registration without the `client_domain`
+value.
+
+However, a client application may be a web application and in this case, domain
+verification adds security because it prevents other clients that are not in
+control of that domain from masquerading as a legitimate client when asking
+users for permission to access their resources.
+
+Unfortunately, domain verification does NOT prevent malicious client applications
+from tricking users with similar-looking domain names.
+
+One way to stop
+such malicious clients is for authorization servers to require an interactive
+client registration process and perform a thorough identity and background check
+for new client applications.
+
+Another way to stop such malicious clients is to have two tiers of client
+registration: automatic and verified. Automatic client registration would be allowed,
+and clients would be marked as unverified. Unverified clients would be limited in the
+permissions the authorization server would grant for any access request. Verified
+clients would be eligible for additnal permissions in access requests.
+
+These approaches are optional for authorization servers to implement.
+
 # Differences from OAuth 2.0
 
 ## Discovery
@@ -1454,7 +1488,6 @@ with the randomly generated request identifier before it provides any
 application information to the user. While application privacy is not
 needed in every deployment, and applies only to non-users of the application,
 the ones that need it will be satisfied by this feature.
-
 
 ## Exchange step always requires client authentication
 

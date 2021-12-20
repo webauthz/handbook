@@ -131,6 +131,11 @@ to ensure the application has the latest version.
 Before an application can request access to a resource, it must
 first register with the authorization server.
 
+The request MUST include a `client_name` to label the client. The value
+of `client_name` is arbitrary and does not need to be unique. It SHOULD
+identify the client application's software name and version, and possibly
+the name and version of its Webauthz library.
+
 If the Register Client URI scheme is `https`, the application sends an HTTPS POST
 request. An example of a Webauthz Registration URI is
 "https://resource.example.com/webauthz/register".
@@ -1356,8 +1361,9 @@ work hours compared to non-work hours.
 
 The authorization server SHOULD require domain verification for the
 `client_domain`.  The verification is currently out of scope for this specification,
-but it could be done automatically via an ACME DNS challenge or interactively
-using the `redirect` feature.
+but it could be done automatically via a DNS challenge in the response or
+using the `redirect` feature to prompt the administrator to complete a DNS challenge
+interactively.
 
 Domain verification does not make sense for all clients. For example, a client
 application that is a mobile or desktop application may not have an associated domain

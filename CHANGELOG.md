@@ -1,3 +1,13 @@
+# v0.3
+
+* Replaced client_domain with client_origin in registration request
+* Added verify-client-origin extension
+* Added verify-client-domain extension
+* Restored use of refresh token in exchange request authorization header
+* Removed client_state from access request
+* Added state to access request response
+* Removed `status` query parameter from grant_redirect_uri when access is denied
+
 # v0.2
 
 * Added client_token_max_seconds to registration response

@@ -44,6 +44,12 @@ The Webauthz protocol assumes the existence of the following parties:
 * Authorization Server (a website that authenticates the user and manages access to a resource)
 * Resource Owner (the user or system authorizing the access)
 
+The resource server and authorization server could be combined into a single
+entity, or they could be separate. It is possible for an authorization server
+to work with multiple resource servers. Applications only need to know the
+URL of the resource they will access, and they will discover the authorization
+server via the Webauthz protocol.
+
 This is the setup sequence which can be done just once, or as needed,
 between an application and a resource server:
 
@@ -96,7 +102,7 @@ curl \
 This allows a resource server to host more than one Webauthz
 configuration, if needed for different applications.
 
-The HTTPS response should look something like this:
+A successful discovery response looks like this:
 
 ```
 HTTP/1.1 200 OK
@@ -120,7 +126,11 @@ The response object SHALL include values for the following keys:
 
 The values are determined by the authorization server administrator.
 
-The application should store this information. The application SHOULD
+The client application SHOULD store the discovery information, indexed by
+the exact value of `webauthz_discovery_uri`. This is because any change in
+the value of `webauthz_discovery_uri` could result in a different document.
+
+The application SHOULD
 check to see if the discovery settings have changed each time it receives a
 401 or 403 status code from the resource server. Existing HTTP mechanisms
 such as the `HEAD` request, entity tags, and conditional requests are sufficient
@@ -133,8 +143,18 @@ first register with the authorization server.
 
 The request MUST include a `client_name` to label the client. The value
 of `client_name` is arbitrary and does not need to be unique. It SHOULD
-identify the client application's software name and version, and possibly
-the name and version of its Webauthz library.
+identify the client application's software name.
+
+A client application SHOULD NOT include its version number in the `client_name`
+property because the Webauthz protocol does not include a way to update this
+value later. See [registration update](#registration-update) for more information.
+
+The request MUST include a `client_origin`. The value of `client_origin` is a URL.
+
+A client origin is fixed to a specific scheme, fully-qualified domain name, and port.
+For example, a client registering with a `client_origin` value of
+'https://example.com' must be able to respond to requests for resources in this
+origin or it will not be able to complete the access request procedure.
 
 If the Register Client URI scheme is `https`, the application sends an HTTPS POST
 request. An example of a Webauthz Registration URI is
@@ -147,30 +167,33 @@ curl \
   -H 'Accept: application/json' \
   -H 'Content-Type: application/json' \
   -X POST \
-  --data '{"client_name": "<client_name>", "client_domain": "<client_domain>"}' \
+  --data '{"client_name": "<client_name>", "client_origin": "<client_origin>"}' \
   '<webauthz_register_uri>'
 ```
+
+If a request does not include `client_name` or `client_origin`,
+an authorization server MUST deny the request with
+`400 Bad Request`.
 
 The authorization server should generate a random `client_id` and
 `client_token`, compute the `client_token_digest` from the `client_token`,
 and store the `client_id` and the `client_token_digest` together with
-the `client_name` and `client_domain` provided by the client,
-and then respond to the client with these two generated values.
+the `client_name` and other values provided by the client.
 
-The authorization server may allow automatic client registrations or require
-an approval process for new client registrations.
+If the authorization server does not allow open client registration,
+the authorization server SHALL deny the request with `401 Unauthorized`.
 
 Where an authorization server
-allows automatic client registration, it responds to a valid registration request
+allows client registration, it responds to a valid registration request
 with `client_id`, `client_token`, and `client_token_max_seconds`.
 
-Where an authorization server requires an approval process for new client
-registrations, it adds `redirect` and `redirect_max_seconds` to the response.
-This informs the client that
-it must redirect its administrator to the provided URL to complete the registration
-process.
+Where an authorization server allows clients to automatically refresh their client
+tokens (instead of creating a new registration), it adds `refresh_token` and
+`refresh_token_max_seconds` to the registration response. The authorization server
+may also add `client_token_min_seconds` to the response to indicate the earliest
+time that the `client_token` may be refreshed.
 
-The HTTPS response should look something like this:
+A successful registration response looks like this:
 
 ```
 HTTP/1.1 200 OK
@@ -179,7 +202,10 @@ Content-Type: application/json
 {
   "client_id": "<client_id>",
   "client_token": "<client_token>",
-  "client_token_max_seconds": "<client_token_max_seconds>"
+  "client_token_max_seconds": <client_token_max_seconds>,
+  "client_token_min_seconds": <client_token_min_seconds>,
+  "refresh_token": "<refresh_token>",
+  "refresh_token_max_seconds": <refresh_token_max_seconds>
 }
 ```
 
@@ -188,70 +214,57 @@ The response object SHALL include the following keys:
 * `client_id` is a unique client identifier assigned to this client
 * `client_token` is a bearer token that authorizes the client to use the
   authorization server APIs
-* `client_token_max_seconds` indicates the length of time the `client_token`
-  is valid
+* `client_token_max_seconds` is the number of seconds the client token is
+  valid; null or undefined means the client token does not expire, or should
+  be used indefinitely until access is denied
+* `client_token_min_seconds` is the number of seconds that a client must wait
+  before attempting to refresh the client token; null or undefined means the
+  client should wait until the client token expires before refreshing it; when
+  specified, this value MUST be less than or equal to `client_token_max_seconds`
+* `refresh_token` is the bearer token that authorizes requests to refresh the
+  client token using the exchange API; a null or undefined value means the client token
+  cannot be refreshed
+* `refresh_token_max_seconds` is the number of seconds the refresh token is
+  valid; null or undefined means the client token does not expire, or should
+  be used indefinitely until access is denied
 
-The response object MAY include the following keys:
+Where the registration response includes a `refresh_token`,
+clients SHOULD immediately compute and store the client token expiration date from
+the `client_token_max_seconds` value. The application SHOULD NOT
+use the client token after `client_token_max_seconds` have passed. Clients can refresh
+their expired client tokens using the [client token exchange](#client-token-exchange) API.
 
-* `redirect` is a URL to which the client must redirect the administrator to complete
-  the registration request
-* `redirect_max_seconds` is an integer indicating the number of seconds that the
-  `redirect` link is valid
+Client applications will not need to send the `client_id` to the authorization server
+in the Webauthz protocol because all issued tokens already identify the client.
+However, when storing tokens or storing context for pending access requests, client
+applications should group all that information using the authorization server's origin
+and the specified client id because if the registration is ever repeated in the future
+and the client application is registered as a new client, the data belonging to
+different client identifiers should not be mixed.
 
-Clients SHOULD store the registration date and `client_token_max_seconds` value,
-or immediately compute and store the client token expiration date. Clients SHOULD
-use the [Exchange](#exchange) API to refresh the client token *before* it expires
-to avoid having to register as a new client or require human intervention to
-extend or replace its client token.
+Client applications SHOULD also include the authorization server's origin,
+computed from the value of `webauthz_register_uri`, as an additional attribute
+that is always used together with the `client_id`, `client_token`, and other
+registration information. For example, for a `webauthz_register_uri` value of
+`https://example.com/webauthz/register`, a client application would store the
+origin and client id as a pair (`https://example.com`, `<client_id>`) such
+that if another authorization server generates an identical `client_id` value,
+they would not be mixed up in storage. This is important for both avoiding
+accidental disclosure of tokens to the wrong party, and also for avoiding
+confusion about why access is denied (when the wrong tokens are sent to an
+authorization server).
 
-## Registration update
+In contrast to the discovery URI, where any change in the URI could mean that it
+points to a different document, a change in the path or query parameters of a
+registration URI does NOT indicate a different authorization server. The origin
+of a registration URI indicates the authorization server.
 
-This section describes a feature that is not a part of the routine
-authorization sequence.
+A client application MUST NOT send its `client_token` or corresponding
+`refresh_token` obtained from a given origin to any other origin.
 
-Sometimes an application's `client_name`, `client_domain`, or other
-registration detail may change, and the application needs to update the
-authorization server with the new information.
-
-The authorization server SHOULD allow applications to submit an
-authenticated registration request to update registration details. The
-authenticated registration request is the same as the original described
-above, with the addition of an `Authorization` header.
-
-To make the request with `curl`:
-
-```
-curl \
-  -H 'Accept: application/json' \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <client_token>' \
-  -X POST \
-  --data '{"client_name": "<client_name>", "client_domain": "<client_domain>"}' \
-  '<webauthz_register_uri>'
-```
-
-The authorization
-server SHOULD keep track of changes to `client_name`, so when a resource
-owner reviews existing authorizations, if they don't recognize an
-application they can see that they previously approved it under a different
-name. The authorization server SHOULD keep track of changes to other registration
-details in the same way.
-
-Where an authorization server requires domain verification for new client registration,
-the authorization server SHOULD require domain verification for the a new
-`client_domain` before make the change effective.
-
-If an application needs to change
-its scheme, domain, or port number, it can submit a new registration request
-to receive a new set of `client_id` and `<client_token>`. Alternatively, an
-application may establish its own redirect from the previous
-origin to the new origin to avoid a new registration.
-
-The HTTPS response should look something like this:
-
-```
-HTTP/1.1 204 No Content
-```
+An authorization server MUST host all its Webauthz APIs and extensions
+on the same origin in order for clients to recognize that they can authenticate
+to these APIs with the same credentials.
 
 ## Request
 
@@ -264,16 +277,24 @@ scheme is `https`, the application sends an HTTPS POST request.
 An example of a Webauthz Request URI is
 "https://resource.example.com/webauthz/request".
 
-The request must include the application's generated `client_state` and the
+The request must include the
 Webauthz challenge parameters `realm` and `scope`.
 
 Where the client application needs the authorization server to redirect users
-after the access prompt, the request must include the `grant_redirect_uri`.
+after the access prompt, the request MUST include `grant_redirect_uri` with
+an origin matching the client's registered `client_origin`. A client application
+SHOULD customize the path and query parameters of `grant_redirect_uri` so it
+will display an appropriate page when the user is redirected back to the client
+application at that location.
+
+The client application SHOULD include a CSRF token in the `grant_redirect_uri`.
+When user is redirected to that location, the client application SHOULD check that the
+CSRF token matches the expected value.
 
 The request format MAY
 be extended by an authorization server to accept additional parameters not
 defined in this specification. Any such additional parameters MUST be
-optional to preserve interoperability between applications and authorization
+optional to preserve interoperability between client applications and authorization
 servers.
 
 To make the request with `curl`:
@@ -284,16 +305,12 @@ curl \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer <client_token>' \
   -X POST \
-  --data '{"client_state": "<client_state>", "realm": "<realm>", "scope": "<scope>", "grant_redirect_uri": "<grant_redirect_uri>"}' \
+  --data '{"realm": "<realm>", "scope": "<scope>", "grant_redirect_uri": "<grant_redirect_uri>"}' \
   '<webauthz_request_uri>'
 ```
 
 The `webauthz_request_uri` was or obtained via the [discovery](#discovery) step.
-The `client_id` is implicit because of the use of the client-specific `client_token`
-in the `Authorization` header. The `client_state` is a value generated by
-the application to help it associate the subsequent grant, if it occurs, with the
-original access request. An application MUST generate a unique `client_state` value
-for each access request.
+
 The `realm` and `scope` parameters MUST be included if they were
 present in `WWW-Authenticate` or `Proxy-Authenticate` header value in the resource server response.
 
@@ -302,11 +319,12 @@ provides a namespace for the `scope` parameter to avoid a collision in scope nam
 across various resources.
 
 Where the `grant_redirect_uri` is specified, the authorization server SHALL check
-that the value is a URI whose authority is the registered `client_domain` or a
-subdomain of `client_domain`. If the `grant_redirect_uri` does not match the
-registered `client_domain`, the authorization server SHALL deny the request with
-`403 Forbidden`. Where the `grant_redirect_uri` is specified and matches the
-`client_domain`, the authorization server MUST store the `grant_redirect_uri` value
+that the value is a URI whose origin matches the client's registered `client_origin`.
+
+If the `grant_redirect_uri` does not match, the authorization server SHALL deny the request with
+`403 Forbidden`.
+
+The authorization server MUST store the matching `grant_redirect_uri` value
 with the request so it can use it to redirect the user after the access prompt.
 
 The authorization server should generate a redirect URL to which the
@@ -314,25 +332,29 @@ application can redirect the user to grant or deny the access.
 The authorization server MUST generate and include a request identifier
 in the URL so it can recognize the user when the user is redirected.
 
-The authorization server responds to the client with the redirect URL.
+The authorization server responds to the client with a request identifier and redirect URL.
 If the redirect URL will expire, or contains a unique identifier referencing an
 access request record that will expire, the response MUST include a `redirect_max_seconds`
 property indicating when this happens. This enables applications to present the
-redirect link to users for a limited time and then hide it, to avoid sending the
+redirect link to users for a limited time and then replace it with a link or button
+to start a new request, to avoid sending the
 user to the authorization server with an invalid link.
 
-Alternatively,
-to avoid the need to keep track of how long the `access_redirect_uri` is valid,
-applications MAY show the user their own link to request access, so they make
-this request and redirect the user only when the user is ready to be redirected.
+Alternatively, client applications can show users a message that accessing the
+resource requires authorization and a link or button to continue, and only start
+the access request when the user taps the link or button, redirecting the user
+immediately to the `access_redirect_uri` without implementing any logic about when
+that link expires.
 
-The HTTPS response should look something like this:
+A successful response with a redirect looks like this:
 
 ```
 HTTP/1.1 200 OK
 Content-Type: application/json
 
 {
+  "state": "<state>",
+  "state_max_seconds": <state_max_seconds>,
   "redirect": "<access_request_uri>",
   "redirect_max_seconds": <redirect_max_seconds>
 }
@@ -340,14 +362,21 @@ Content-Type: application/json
 
 The response object SHALL include the following keys:
 
+* `state` is a request identifier generated by the authorization server; this could be
+  a lookup token or a self-encoded token; the client application will also receive this
+  value in the `grant_redirect_uri` later
 * `redirect` is a URL to which the client must redirect the user to continue
   the access request (typically a site where the user will authenticate and approve
   the access request)
 
 The response object MAY include the following keys:
 
+* `state_max_seconds` is an integer indicating the maximum number of seconds that the `state`
+  value must be stored by the client application
 * `redirect_max_seconds` is an integer indicating the number of seconds that the
   `redirect` link is valid
+
+The `state_max_seconds` allows the application to safely delete stale access requests.
 
 The `redirect_max_seconds` key allows the authorization server to issue time-limited
 tokens in that URL. If this key is undefined, or is present with a `null` value,
@@ -358,6 +387,25 @@ the clients can use the `redirect_max_seconds` value to inform the user of how m
 time they have to click on the link. Clients could automatically disable the link when
 it expires, or react to an expired link by automatically starting a new request and then
 automatically redirecting the user (since the user indicated they are ready to continue).
+
+The `redirect_max_seconds` value indicates the maximum time that is allowed for
+redirecting a user to the authorization server. The `state_max_seconds` value indicates
+the maximum time that is allowed for the user to complete the authorization prompt
+at the authorization server and be redirected back to the client application.
+Therefore, the `state_max_seconds` value MUST be equal to or greater than the
+`redirect_max_seconds` value.
+
+The application SHALL store the `state` value and associate it with the access request.
+
+Where a client application has multiple registrations with the authorization server,
+the client application MUST associate the appropriate `client_id` with the request `state`
+in order to use the correct `client_token` later when exchanging the `grant_token` for
+an `access_token`.
+
+Where a client application is a multi-user application and the access request
+is NOT for a resource that is intended to be shared among all users,
+the client application SHALL associate the request with the currently authenticated
+user.
 
 If the Access Request URI scheme is `https`, the application redirects the user
 to the authorization server by providing the user's browser with a
@@ -379,7 +427,7 @@ When the link is accessed by the user's browser, the authorization server respon
 should be the user interface of the authorization server
 that will show the request to the user and [prompt](#prompt) the user to grant or
 deny the access. If the Webauthz Request URI scheme is `https`, the
-server response would typically be HTML, something like this:
+server response would typically be HTML, like this:
 
 ```
 HTTP/1.1 200 OK
@@ -394,14 +442,14 @@ Content-Type: text/html
 
 The second step of the authorization routine is to prompt the user
 to grant or deny the access. The implementation of this step is
-specific to the resource server, but typically it would display
+specific to the authorization server, but typically it would display
 the request and then offer two choices to the user. It might look
-something like this:
+like this:
 
 ```
 Webauthz Resource Request
 
-<client_name> (<client_domain>)
+<client_name> (<client_origin>)
 is requesting access to
 <resource>.
 
@@ -415,9 +463,7 @@ is requesting access to
 The `<client_name>` placeholder SHOULD be a human-readable format
 identifying the application making the request. 
 
-The `<client_domain>` placeholder SHOULD be the registered client domain.
-The authorization server SHOULD indicate whether the client domain was
-verified, for example with a checkmark icon.
+The `<client_origin>` placeholder SHOULD be the registered client origin.
 
 The `<resource>` placeholder SHOULD be a human-readable format,
 possibly including the `realm` attribute from the `WWW-Authenticate`
@@ -449,8 +495,7 @@ back to the application. If the user granted the requested
 access, the authorization server will generate a `grant_token` and
 include it in the Grant Redirect URI as a query parameter.
 If the user denied
-the requested access, the redirect will NOT include a `grant_token`,
-but MAY include `status=denied`.
+the requested access, the redirect will NOT include a `grant_token`.
 
 If the `grant_redirect_uri` scheme is `https`, the authorization server
 redirects the user to the application by providing the user's browser
@@ -465,17 +510,21 @@ click on a link to continue.
 The access denied link looks like this:
 
 ```
-<grant_redirect_uri>?client_id=<client_id>&client_state=<client_state>&status=denied
+<grant_redirect_uri>?state=<state>
 ```
 
 The access granted link looks like this:
 
 ```
-<grant_redirect_uri>?client_id=<client_id>&client_state=<client_state>&grant_token=<grant_token>
+<grant_redirect_uri>?state=<state>&grant_token=<grant_token>
 ```
 
-The `client_id`, `client_state`, and `grant_redirect_uri`
-were specified in the access request.
+The `state` parameter is the same value that was returned earlier from the request API.
+The `grant_redirect_uri` was specified by the client application.
+
+Where the `grant_redirect_uri` already includes query parameters, the authorization
+server SHALL merge the `state` and `grant_token` query parameters into the query string.
+
 The `grant_token` was generated by the authorization
 server in response to the user tapping the `[Grant]` button.
 
@@ -488,7 +537,7 @@ that the request failed (if the `grant_token` is not present in the query
 parameters).
 
 If the application is a website and the Grant Redirect URI scheme is 
-`https`, the application response would typically be HTML, something like this:
+`https`, the application response would typically be HTML, like this:
 
 ```
 HTTP/1.1 200 OK
@@ -504,31 +553,51 @@ may open it directly based on the
 Grant Redirect URI, or it may load a website that causes the application
 to open and passes the query parameters to it.
 
-An application MUST validate the `client_id` and `client_state` values
-to avoid the exchange step for an access request that it did not originate.
-The `client_id` must identify the application's registered client,
-for which it has a `client_token`. The `client_state` must identify the
-context of the access request, so the application can repeat the resource
-access that requires the access token after it obtains the access token
+Where a client application is a multi-user application and the access request
+is NOT for a resource that is intended to be shared among all users,
+the client application MUST ensure that the currently authenticated user is
+the same user that initiated the access request.
+
+The client application SHALL check that the value of the `state` query parameter
+matches the stored `state` value in the request record.
+If the received value does not match the stored value,
+the client application MUST stop processing the access request. When this error happens,
+client applications MAY start a new access request.
+
+An application MUST validate the `state` value in the query matches the
+stored `state` value from the [request](#request) step. If they do not
+match, the client application SHALL stop processing the request. The client
+application SHOULD inform the user of the error.
+
+The client SHOULD use its own query or path parameter in the `grant_redirect_uri`
+or the `state` value to identify the context of the original access request,
+so the application can repeat the resource
+access that requires authorization after it obtains the access token
 in the exchange step.
 
 ## Exchange
 
 The exchange API is used in the following ways:
 
-* to exchange the `grant_token` for an `access_token`
-* to refresh the `access_token`
-* to refresh the `client_token`
+* to exchange a `grant_token` for an `access_token`
+* to refresh an `access_token` using a `refresh_token`
+* to refresh a `client_token` using a `refresh_token`
+* to exchange a `permit_token` for an `access_token`
 
 If the Webauthz Exchange URI scheme is `https`, the application sends
 an HTTPS POST request. An example of an Webauthz Exchange URI is
 "https://resource.example.com/webauthz/exchange".
 
-The exchange request MUST include an `Authorization` header with the
-application's `client_token` so that no other party
-may exchange a token that is assigned to that client.
+Requests to the exchange API must be authenticated using either a
+`client_token` (used when exchanging a `grant_token` for an `access_token`)
+or a `refresh_token` (used when refreshing an `access_token` or `client_token`).
 
-### Grant token
+A multi-user client application MUST store all information received from
+this response in a per-user storage area unless the access is intended
+to be shared among multiple users. See
+[multi-user applications](#multi-user-applications) for more information.
+
+### Grant token exchange
 
 The fourth step of the authorization routine is for the application
 to exchange the `grant_token` for an `access_token`. This is
@@ -537,6 +606,9 @@ history or in other non-trusted areas due to being passed between
 the browser and a mobile or desktop application on the user's system,
 and also because the `access_token` may be very large and we want to
 avoid relying on clients and servers to handle very large URLs.
+
+The exchange request MUST include an `Authorization` header with the
+`client_token`.
 
 The exchange request MUST include the `grant_token` to reference the 
 permission(s) granted by the resource owner.
@@ -581,7 +653,7 @@ The authorization server MAY include a `refresh_token` attribute
 in the response. When a `refresh_token` is provided, it indicates
 the application MAY renew the access token when it expires.
 
-A successful HTTPS response should look something like this:
+A successful exchange response looks like this:
 
 ```
 HTTP/1.1 200 OK
@@ -590,22 +662,47 @@ Content-Type: application/json
 {
   "access_token": "<access_token>",
   "access_token_max_seconds": <access_token_max_seconds>,
+  "access_token_min_seconds": <access_token_min_seconds>,
+  "refresh_token": "<refresh_token>",
+  "refresh_token_max_seconds": <refresh_token_max_seconds>,
+  "permit_token": "<permit_token>",
+  "permit_token_max_seconds": <permit_token_max_seconds>
 }
 ```
 
-The response object SHALL include the following keys:
+A successful response object SHALL include the following keys:
 
 * `access_token` is the bearer token that authorizes requests for the resource
-
-The response object SHOULD include the following keys:
-
-* `access_token_max_seconds` is the number of seconds the access token
-  is valid
+* `access_token_max_seconds` is the number of seconds the access token is
+  valid; null or undefined means the access token does not expire, or should
+  be used indefinitely until access is denied
+* `access_token_min_seconds` is the number of seconds that a client must wait
+  before attempting to refresh the access token; null or undefined means the
+  client should wait until the access token expires before refreshing it; when
+  specified, this value MUST be less than or equal to `access_token_max_seconds`
+* `refresh_token` is the bearer token that authorizes requests to refresh the
+  access token using the exchange API; null or undefined means the access token
+  cannot be refreshed
+* `refresh_token_max_seconds` is the number of seconds the refresh token is
+  valid; null or undefined means the access token does not expire, or should
+  be used indefinitely until access is denied
+* `permit_token` is a token that can be exchanged for a new set of `access_token`
+  and `refresh_token` using the exchange API; null or undefined means the
+  client would need to make a new authorization request with the user
+* `permit_token_max_seconds` is the number of seconds the permit token is
+  valid; null or undefined means the permit token does not expire, or should
+  be used indefinitely until access is denied
 
 The application SHOULD store the `access_token` somewhere
 safe for subsequent use.
 
-The format of `access_token_max_seconds`
+A multi-user client application MUST store all information received from
+this response in a per-user storage area unless the access is intended
+to be shared among multiple users. See
+[multi-user applications](#multi-user-applications) for more information.
+
+The format of `access_token_max_seconds`, `access_token_min_seconds`,
+`refresh_token_max_seconds`, and `permit_token_max_seconds`
 is a non-negative integer, specifying the number of seconds that
 token is valid since the moment it was issued. Applications SHOULD
 convert this to their preferred time zone and store the computed
@@ -613,17 +710,19 @@ timestamp, or they should store the current timestamp when they received
 the token along with the max seconds value and compute the expiration
 period later.
 
-Where the response includes the `access_token_max_seconds` attribute,
-the application SHOULD store its value directly or compute and store the
-corresponding future timestamp. The application SHOULD NOT
+The application SHOULD NOT
 make resource access requests with the access token after
 `access_token_max_seconds` have passed. Clients can refresh
-their expired access tokens using the [Exchange](#exchange) API.
+their expired access tokens using the [access token exchange](#access-token-exchange) API.
 
-The application SHOULD attempt to refresh the
-access token some time before it expires to avoid an extra request
-to the resource where its access is denied with the expired
-`access_token`.
+Where the application received a `refresh_token`, the application SHOULD
+attempt to refresh the access token after it expires and use the new
+`access_token` for subsequent requests. Where the `access_token_min_seconds`
+was also provided in the response, the application MAY attempt to refresh
+the access token before it expires and after `access_token_min_seconds` have
+elapsed.
+See the [access token exchange](#access-token-exchange) section
+for more details.
 
 If any of the checks fail, the authorization server generates
 a response with the `401 Unauthorized` or `403 Forbidden`,
@@ -640,16 +739,19 @@ in progress, and the request should not be repeated.
 When the client receives a `403 Forbidden` response, the client SHOULD
 inform the user and start a new access request for the resource.
 
-### Access token
+### Access token exchange
 
-To refresh an access token, the application repeats the exchange
-request but uses the `access_token` instead of the `grant_token`:
+To refresh an access token, the application sends an exchange
+request with the `access_token`.
+
+The exchange request MUST include an `Authorization` header with the
+`refresh_token` that was issued for the given `access_token`.
 
 ```
 curl \
   -H 'Accept: application/json' \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <client_token>' \
+  -H 'Authorization: Bearer <refresh_token>' \
   -X POST \
   --data '{"access_token": "<access_token>"}' \
   '<webauthz_exchange_uri>'
@@ -661,30 +763,45 @@ may be appended to the query string portion of the `webauthz_exchange_uri`:
 ```
 curl \
   -H 'Accept: application/json' \
-  -H 'Authorization: Bearer <client_token>' \
+  -H 'Authorization: Bearer <refresh_token>' \
   -X POST \
   --data '' \
   '<webauthz_exchange_uri>?access_token=<access_token>'
 ```
 
-The authorization server validates the `client_token`, then
+The authorization server validates the `refresh_token`, then
 validates the `access_token`. 
 
-The validation MUST include that the `client_token` is valid
+The validation MUST include that the `refresh_token` is valid
 for a registered client, and that the `access_token` was issued to
-the same client.
+the same client, that the `refresh_token` and the `access_token`
+point to the same underlying permission, and that the `access_token`
+was created on or after the given `refresh_token`.
 
-An authorization server MAY exchange
-an expired access token for a new one if the underlying permission
-has not expired. This is decided by the authorization server implementation.
-An authorization server MAY reject an exchange request for an expired
-access token.
+An authorization server MUST reject an exchange request containing an expired
+refresh token.
+
+An authorization server MUST reject an exchange request containing an access token that was created before the given refresh token.
+
+An authorization server MUST reject an access token exchange request
+if the underlying permission has expired or been revoked.
+
+An authorization server MAY reject an exchange request with
+`429 Too Many Requests` if the `access_token_min_seconds` has not yet elapsed
+or the authorization server does not support early refresh.
+The authorization server SHOULD include the `Retry-After` header in the
+response to indicate how long the client application should wait before
+attempting to refresh that access token. The `Retry-After` value SHOULD be
+computed as the difference between the expected earliest refresh time
+(`access_token_min_seconds` after the access token creation) and the current
+time. If the authorization server does not support early refresh,
+it should use an implied value of `access_token_max_seconds` after the access
+token creation as the expected earliest refresh time.
 
 If all the checks pass, the authorization server generates a new
-`access_token` and responds to the application. 
+`access_token` and responds to the application.
 
-The response format for an access token exchange is the same as
-for the original exchange, and may look something like this:
+A successful response looks like this:
 
 ```
 HTTP/1.1 200 OK
@@ -693,6 +810,9 @@ Content-Type: application/json
 {
   "access_token": "<access_token>",
   "access_token_max_seconds": <access_token_max_seconds>,
+  "access_token_min_seconds": <access_token_min_seconds>,
+  "refresh_token": "<refresh_token>",
+  "refresh_token_max_seconds": <refresh_token_max_seconds>
 }
 ```
 
@@ -700,13 +820,32 @@ The application SHOULD replace its old access token with the new
 access token and compute the new expiration date to schedule the next
 refresh.
 
-The authorization server SHOULD only
-accept access token exchange requests with the most recent `access_token`
-value.
+A multi-user client application MUST store all information received from
+this response in a per-user storage area unless the access is intended
+to be shared among multiple users. See
+[multi-user applications](#multi-user-applications) for more information.
+
+The format of `access_token_max_seconds`, `access_token_min_seconds`,
+and `refresh_token_max_seconds`
+is a non-negative integer, specifying the number of seconds that
+token is valid since the moment it was issued. Applications SHOULD
+convert this to their preferred time zone and store the computed
+timestamp, or they should store the current timestamp when they received
+the token along with the max seconds value and compute the expiration
+period later.
+
+If the `refresh_token` will expire before the next `access_token` refresh,
+and where the underlying permission will be valid beyond that time, the
+authorization server SHOULD generate and include a new `refresh_token` and
+`refresh_token_max_seconds` with the response.
+
+Where the `refresh_token` is included in the exchange response,
+the application MUST replace its stored `refresh_token` with the
+new `refresh_token`, and use the new `refresh_token` in subsequent
+client token refresh exchange requests.
 
 If any of the checks fail, the authorization server generates
-a response with the `401 Unauthorized` or `403 Forbidden`,
-depending on the failure. A missing or expired `client_token`
+an error response. A missing or expired `client_token`
 would result in `401 Unauthorized`, indicating to the application
 that it needs to repeat the [registration](#registration) step
 and then start over with a new access [request](#request),
@@ -714,23 +853,28 @@ whereas an invalid or expired `access_token`
 would result in `403 Forbidden`, indicating
 to the application that the exchange is denied, and this is due
 either to a bug in the application code, or to an active attack
-in progress, and the request should not be repeated.
+in progress, and the request should not be repeated. An attempt to
+refresh an access token too early would result in `429 Too Many Requests`
+with a `Retry-After` header.
 
 When the client receives a `403 Forbidden` response, the client SHOULD
 inform the user and start a new access request for the resource.
 
-### Client token
+### Client token exchange
 
-To refresh a client token, the application repeats the exchange
-request but uses the `refresh_token` instead of the `grant_token`:
+To refresh a client token, the application sends an exchange
+request with the `client_token`.
+
+The exchange request MUST include an `Authorization` header with the
+`refresh_token` that was issued for the given `client_token`.
 
 ```
 curl \
   -H 'Accept: application/json' \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <client_token>' \
+  -H 'Authorization: Bearer <refresh_token>' \
   -X POST \
-  --data '{"refresh_token": "<refresh_token>"}' \
+  --data '{"client_token": "<client_token>"}' \
   '<webauthz_exchange_uri>'
 ```
 
@@ -740,30 +884,43 @@ may be appended to the query string portion of the `webauthz_exchange_uri`:
 ```
 curl \
   -H 'Accept: application/json' \
-  -H 'Authorization: Bearer <client_token>' \
+  -H 'Authorization: Bearer <refresh_token>' \
   -X POST \
   --data '' \
-  '<webauthz_exchange_uri>?refresh_token=<refresh_token>'
+  '<webauthz_exchange_uri>?client_token=<client_token>'
 ```
 
-The authorization server validates the `client_token`, then
-validates the `refresh_token`. 
+The authorization server validates the `refresh_token`, then
+validates the `client_token`. 
 
-The validation MUST include that the `client_token` is valid
-for a registered client, and that the `refresh_token` was issued to
+The validation MUST include that the `refresh_token` is valid
+for a registered client, and that the `client_token` was issued to
 the same client.
 
-An authorization server MAY exchange
-an expired client token for a new one if the underlying client registration
-has not expired. This is decided by the authorization server implementation.
-An authorization server MAY reject an exchange request for an expired
-client token.
+An authorization server MUST reject an exchange request containing an expired
+refresh token.
+
+An authorization server MUST reject an exchange request containing a client token that was created before the given refresh token.
+
+An authorization server MUST reject a client token exchange request
+if the client registration has expired or been revoked.
+
+An authorization server MAY reject an exchange request with
+`429 Too Many Requests` if the `client_token_min_seconds` has not yet elapsed
+or the authorization server does not support early refresh.
+The authorization server SHOULD include the `Retry-After` header in the
+response to indicate how long the client application should wait before
+attempting to refresh that client token. The `Retry-After` value SHOULD be
+computed as the difference between the expected earliest refresh time
+(`client_token_min_seconds` after the client token creation) and the current
+time. If the authorization server does not support early refresh,
+it should use an implied value of `client_token_max_seconds` after the client
+token creation as the expected earliest refresh time.
 
 If all the checks pass, the authorization server generates a new
 `client_token` and responds to the application. 
 
-The response format for a client token exchange is similar to
-the original exchange, and may look something like this:
+A successful response looks like this:
 
 ```
 HTTP/1.1 200 OK
@@ -772,6 +929,7 @@ Content-Type: application/json
 {
   "client_token": "<client_token>",
   "client_token_max_seconds": <client_token_max_seconds>,
+  "client_token_min_seconds": <client_token_min_seconds>,
   "refresh_token": "<refresh_token>",
   "refresh_token_max_seconds": <refresh_token_max_seconds>
 }
@@ -779,21 +937,44 @@ Content-Type: application/json
 
 The response object SHALL include the following keys:
 
-* `client_token` a new client token for the client to use
-* `client_token_max_seconds` indicates when the new client token expires
-
-The response object MAY include the following keys:
-
-* `refresh_token` a new refresh token for the client to use
-* `refresh_token_max_seconds` indicates when the new refresh token expires
+* `client_token` is a bearer token that authorizes the client to use the
+  authorization server APIs
+* `client_token_max_seconds` is the number of seconds the client token is
+  valid; null or undefined means the client token does not expire, or should
+  be used indefinitely until access is denied
+* `client_token_min_seconds` is the number of seconds that a client must wait
+  before attempting to refresh the client token; null or undefined means the
+  client should wait until the client token expires before refreshing it; when
+  specified, this value MUST be less than or equal to `client_token_max_seconds`
+* `refresh_token` is the bearer token that authorizes requests to refresh the
+  client token using the exchange API; null or undefined means the client token
+  cannot be refreshed
+* `refresh_token_max_seconds` is the number of seconds the refresh token is
+  valid; null or undefined means the client token does not expire, or should
+  be used indefinitely until access is denied
 
 The application SHOULD immediately replace its old client token with the new
 client token and compute the new expiration date to schedule the next
 refresh.
 
-The authorization server SHOULD only
-accept client token exchange requests with the most recent `refresh_token`
-value.
+A multi-user client application MUST store all information received from
+this response in a per-user storage area unless the access is intended
+to be shared among multiple users. See
+[multi-user applications](#multi-user-applications) for more information.
+
+The format of `client_token_max_seconds`, `client_token_min_seconds`,
+and `refresh_token_max_seconds`
+is a non-negative integer, specifying the number of seconds that
+token is valid since the moment it was issued. Applications SHOULD
+convert this to their preferred time zone and store the computed
+timestamp, or they should store the current timestamp when they received
+the token along with the max seconds value and compute the expiration
+period later.
+
+If the `refresh_token` will expire before the next `client_token` refresh,
+and where the client registration will be valid beyond that time, the
+authorization server SHOULD generate and include a new `refresh_token` and
+`refresh_token_max_seconds` with the response.
 
 Where the `refresh_token` is included in the exchange response,
 the application MUST replace its stored `refresh_token` with the
@@ -807,6 +988,91 @@ would result in `401 Unauthorized`, indicating to the application
 that it needs to repeat the [registration](#registration) step
 and then start over with a new access [request](#request),
 whereas an invalid or expired `refresh_token`
+would result in `403 Forbidden`, indicating
+to the application that the exchange is denied, and this is due
+either to a bug in the application code, or to an active attack
+in progress, and the request should not be repeated.
+
+When the client receives a `403 Forbidden` response, the client SHOULD
+inform the administrator and start a new client registration request.
+
+### Permit token exchange
+
+To obtain a new set of `access_token` and corresponding `refresh_token` after the `refresh_token` has expired, the application sends an exchange
+request with the `permit_token`.
+
+The exchange request MUST include an `Authorization` header with the
+`client_token`.
+
+```
+curl \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <client_token>' \
+  -X POST \
+  --data '{"permit_token": "<permit_token>"}' \
+  '<webauthz_exchange_uri>'
+```
+
+Alternatively, the request body may be empty and the parameters
+may be appended to the query string portion of the `webauthz_exchange_uri`:
+
+```
+curl \
+  -H 'Accept: application/json' \
+  -H 'Authorization: Bearer <client_token>' \
+  -X POST \
+  --data '' \
+  '<webauthz_exchange_uri>?permit_token=<permit_token>'
+```
+
+The authorization server validates the `client_token`, then
+validates the `permit_token`. 
+
+The validation MUST include that the `client_token` is valid
+for a registered client, and that the `permit_token` was issued to
+the same client.
+
+An authorization server MUST reject an exchange request containing an expired
+client token or an expired permit token.
+
+An authorization server MUST reject a permit token exchange request
+if the client registration has expired or been revoked, or if the underlying permission referenced by the permit token has expired or been revoked.
+
+If all the checks pass, the authorization server generates a new
+`access_token` and `refresh_token` for the permission referenced by the `permit_token`, generates a new `permit_token` for the permission, revokes the `permit_token` that was used in the exchange request, and responds to the application. 
+
+A successful response looks like this:
+
+```
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "access_token": "<access_token>",
+  "access_token_max_seconds": <access_token_max_seconds>,
+  "access_token_min_seconds": <access_token_min_seconds>,
+  "refresh_token": "<refresh_token>",
+  "refresh_token_max_seconds": <refresh_token_max_seconds>,
+  "permit_token": "<permit_token>",
+  "permit_token_max_seconds": <permit_token_max_seconds>
+}
+```
+
+The response is the same as the original response from the [grant token exchange](#grant-token-exchange). The client application SHOULD store the new `access_token`, `refresh_token`, and `permit_token` somewhere safe for future use.
+
+A multi-user client application MUST store all information received from
+this response in a per-user storage area unless the access is intended
+to be shared among multiple users. See
+[multi-user applications](#multi-user-applications) for more information.
+
+If any of the checks fail, the authorization server generates
+a response with the `401 Unauthorized` or `403 Forbidden`,
+depending on the failure. A missing or expired `client_token`
+would result in `401 Unauthorized`, indicating to the application
+that it needs to repeat the [registration](#registration) step
+and then start over with a new access [request](#request),
+whereas an invalid or expired `permit_token`
 would result in `403 Forbidden`, indicating
 to the application that the exchange is denied, and this is due
 either to a bug in the application code, or to an active attack
@@ -937,14 +1203,18 @@ configuration settings that are shared with the other parties.
 
 ## Application
 
-The application determines (automatically or via configuration) the following URI,
-which it will share with the authorization server during registration:
+The application determines (automatically or via configuration) the following URIs,
+which it will share with the authorization server during registration and access
+requests:
 
-* Grant Redirect URI
+* Client Origin URI (at registration)
+* Grant Redirect URI (for each access request)
 
 After the user grants or denies the access request, the authorization server
 will redirect the user to the Grant Redirect URI, with query parameters that
 vary depending on the user's selection.
+
+The Grant Redirect URI origin must match the registered Client Origin URI.
 
 ## Authorization Server
 
@@ -989,12 +1259,39 @@ a request.
 A token presented to the server must be sufficient to both
 identify and authenticate the client.
 
-## Client token
+## Client token usage
 
 Generated by the authorization server in response to an application
 registration request.
 
-## Grant token
+Webauthz clients are authenticated via a client token which is
+opaque to clients. To avoid accidentally disclosing this token to
+attackers, the client token MUST NOT be used in any context outside
+the the `Authorization` header of client
+requests to the authorization server.
+
+Specifically:
+
+* A client token MUST NOT be written to log files in production
+* A client token MUST NOT be sent to resource servers
+* Hash of a client token MUST NOT be used in any publicly-visible location
+
+An application may use a client token until it expires.
+
+To avoid an interruption in service, a client application MUST
+refresh a client token before it expires. Where a
+`client_token_min_seconds` value was provided with the client token, a
+client application MUST wait at least that amount of time before attempting
+to refresh the client token. If a `client_token_min_seconds` value was not
+provided with the token, a client SHOULD wait at least 80% of the
+`client_token_max_seconds` value before attempting to refresh the client token.
+
+For example, if
+`client_token_max_seconds` is 2592000 (30 days), and `client_token_min_seconds` is 2073600 (24.5 days)
+or not provided, a client application may
+send the client token refresh request after at least 24.5 days have elapsed.
+
+## Grant token usage
 
 Generated by the authorization server in response to an application
 resource request.
@@ -1017,35 +1314,95 @@ is intercepted by some other party that does not have access to the
 application, it cannot be used to obtain the corresponding access
 token.
 
-## Access token
+Grant tokens cannot be refreshed. If a grant token expires or the
+authorization server denies exchanging a grant token for an access
+token for any other reason, an application would need to start the
+process again with a new request.
+
+## Access token usage
 
 Generated by the authorization server in response to an application
 token exchange request. The application must provide a valid
 grant token as the input to the exchange.
 
-## Refresh token
+An application may use an access token until it expires.
+
+To avoid an interruption or delay in access, a client application SHOULD
+attempt to refresh an access token before it expires. Where a
+`access_token_min_seconds` value was provided with the access token, a
+client application MUST wait at least that amount of time before attempting
+to refresh the access token. If a `access_token_min_seconds` value was not
+provided with the token, a client SHOULD wait at least 80% of the
+`access_token_max_seconds` value before attempting to refresh the access token.
+
+For example, if
+`access_token_max_seconds` is 4500 (75 minutes), and `access_token_min_seconds`
+is 3600 (60 minutes) or not provided, a client application may
+send the access token refresh request after at least 60 minutes have elapsed.
+
+## Refresh token usage
 
 Generated by the authorization server in response to an application
 client registration or exchange request. The refresh token is used
-by the client application to automatically refresh its client token.
-This allows the client token validity period to be limited in order
-to mitigate exhaustive search attacks on client tokens.
+by the client application to automatically refresh its access token or client token.
+This allows the access token or client token validity period to be limited in order
+to mitigate exhaustive search attacks.
+
+An application may use a refresh token until it expires.
+
+An authorization server will automatically include new refresh tokens
+in exchange responses as needed. Clients cannot explicitly request a
+refresh of a refresh token.
+
+## Permit token usage
+
+Generated by the authorization server in response to an exchange request
+with a grant token. The permit token is used by the client application to
+recover from expired access and refresh tokens without prompting the user
+for permission again, as long as the underlying permission has not expired
+or been revoked.
+
+This allows client applications to minimize the volume of refresh traffic
+to an authorization server. Client applications can refresh access tokens
+for a resource while it is being used, and when they detect the usage of
+that resource is becoming infrequent they can choose to not refresh access
+tokens for that resource without affecting their user experience. When a
+client application needs to access that resource again after the access and
+refresh tokens have expired, it can use a permit token if one was provided.
+
+An application may use a permit token until it expires. A permit token can only be used once.
+
+An authorization server will automatically include a new permit token
+in the permit token exchange response.
 
 # Token format
 
 The format of the token is unspecified because it is opaque
-to clients.
+to clients. An authorization server may use any suitable format.
 
 However, we suggest two exemplary formats:
 
 * pointer to data
 * encoded data
 
+An authorization server could, for example, use the encoded data
+format for grant tokens, access tokens, and client tokens, while
+using the pointer to data format for refresh tokens and permit tokens.
+
 ## Pointer to data
+
+A lookup token could be any value that the recipient can then
+lookup in a database to retrieve the information associated with
+the token.
+
+For example, a lookup token could be a UUID, a base64-encoded random
+value, or a hash of the associated data. This section describes a
+custom format that an authorization server could use for its lookup
+tokens.
 
 This format is comprised of two fields, the `client_id` and
 the `token_value`, separated by a single character which could
-be a colon `:`, period `.`, tilde `~` or other character.
+be a colon `:`, period `.`, tilde `~`, or other character.
 
 Both `client_id` and `token_value` SHOULD be URL-safe, but
 applications SHOULD escape all dynamic values used in URLs
@@ -1088,6 +1445,11 @@ impersonate arbitrary applications.
 The data retrieved from storage should include the time the token
 was issued, the time it expires (optional), and other attributes.
 
+Authorization servers using tokens of this type MUST NOT store the
+original token value so the original token cannot be retrieved from
+the authorization server's database and used to masquerade as existing
+clients.
+
 ## Encoded data
 
 This format could be a JSON Web Token (JWT) as described in
@@ -1096,23 +1458,131 @@ This format could be a JSON Web Token (JWT) as described in
 
 This is the same method used by OAuth 2.0 implementations.
 
-
 # Discussion
 
-## Registration
+## Registration modes
+
+### Closed registration
+
+Authorization servers may deny client registrations. This should be the
+default mode for authorization servers that are not fully configured
+(especially the data storage mechanism and access to storage).
+
+### Open registration
+
+Authorization servers may allow open registration, where any client may
+register and use the Webauthz request and exchange APIs. This is
+the recommended mode for authorization servers that don't have any
+specific need to deny open registration.
+
+### Gated registration
+
+Authorization servers may deny open registration and allow only
+pre-authorized clients to register. This mode requires interaction by
+the client application administrator (for web applications) or user
+(for mobile and desktop applications) to request approval for their
+client application.
+
+A pre-authorization for client applications may be confusing to users
+who are trying to access a resource because they need to first sign in or
+register for access to the authorization server, then configure their
+client application with a one-time
+registration token, before continuing with their original request.
+
+To avoid such confusion, client applications SHOULD make a clear distinction
+in their user interface between 1) a redirect to the authorization server for
+pre-authorization to register the client application, and 2) a redirect to
+the authorization server for request access to a resource.
+
+Furthermore, web application clients SHOULD NOT redirect their non-administrative
+users to the authorization server for pre-authorization. Instead, when a web client
+application encounters a non-open authorization server, the client application
+SHOULD notify the user that it cannot request access to the resource at that time,
+then notify the administrator of the web application that action is required to
+register with the authorization server.
+
+## Registration update
+
+In Webauthz, a client application may register with an authorization server
+using its `client_name` and `client_origin`, but does not have a way to
+update these values after registration. To change these values, a client
+application must register again with the new values and obtain its permissions
+again from the user.
+
+The Webauthz protocol does not
+include a capability to edit these values after registration because when
+a user approves a permission for a client application, the user sees
+the client application's `client_name` and `client_origin` in the authorization
+prompt. If these are allowed to change, a user reviewing their authorizations
+later might not recognize a client application to which a permission was
+granted.
+
+This could be mitigated by having the authorization server keep track
+of the changes and show them to the user. However, this represents additional
+development effort for all authorization servers implementing the Webauthz
+protocol, whereas simply registering as a new client with the updated
+`client_name` or `client_origin` values and then obtaining a new permission
+from the user is easy and doesn't require additional development.
+
+Webauthz can be extended to allow clients to register and update their
+version information separate from their name, and also to allow clients to
+update their `client_name` or `client_origin` values with appropriate
+controls or mitigations in place for issues that could arise from such updates.
+
+The following extensions allow edits to the client registration:
+
+* [edit name](client_edit_name/README.md)
+* [edit origin](client_edit_origin/README.md)
+* [edit version](client_edit_version/README.md)
+
+Alternatively, where `client_origin` must be updated, an application may
+establish its own internal redirect from the previous
+origin to the new origin to avoid a new registration or any re-verification.
+
+## Storage management
+
+### Token data storage
+
+Authorization servers may delete grant tokens using the lookup format after
+their expiration date or after they are successfully exchanged for access tokens.
+
+Authorization servers may delete refresh tokens using the lookup format after
+their expiration date.
+
+Authorization servers using the lookup format for access tokens MUST keep
+expired access tokens until the corresponding refresh tokens expire so that clients
+can exchange expired access tokens.
+
+Authorization servers using the lookup format for client tokens MUST keep
+expired client tokens until the corresponding refresh tokens expire so that clients
+can exchange expired client tokens.
+
+### Secret key and private key storage
+
+Authorization servers SHOULD delete secret keys used to
+generate self-encoded tokens after all tokens generated using those keys
+have expired and the corresponding refresh tokens have expired.
+
+Authorization servers SHOULD delete public keys used to
+verify self-encoded tokens after all tokens generated using the corresponding
+private keys have expired and the corresponding refresh tokens have expired.
+
+Authorization servers SHOULD delete private keys used to
+generate self-encoded tokens when those private keys are no
+longer needed to generate new tokens.
+
+### Client data
 
 Authorization servers may delete old registrations to limit the
-size of the client data. Possible schemes include:
+size of the stored client data. Possible schemes include:
 
 * delete all registrations earlier than specified date (some time ago)
 * delete all registrations older than a specified number of the most recent registrations
 * set an expiration date on new registrations, and routinely deleted expired registrations
 
-Some authorization servers may require a pre-approved relationship
-to establish access, which is possible while complying with this
-specification. The applications can simply register in advance
-via a registration resource, and the authorization server operator
-may mark individual requests as approved.
+When an authorization deletes a client registration, the authorization
+server MUST also delete, expire, or revoke all client tokens, access tokens,
+refresh tokens, and related permissions granted to the client. 
 
 ## Cryptography
 
@@ -1126,11 +1596,39 @@ why you'd want to use it, start with simple tokens. It's a decision you
 can change later without affecting applications at all, or with only a 
 minor impact as they need to request access again to get the new token.
 
+## Secrets
+
+Applications MUST safeguard the folowing secrets:
+
+* Client token and corresponding refresh token
+* Access token and corresponding refresh token and permit token, if provided
+
+> The `client_id` and `grant_token` are NOT secret and may be exposed to users
+> and browsers (including browser plugins) in the URL during the access request
+> process. However, exposure of these values could help an attacker so they
+> should be treated as confidential.
+
+Resource servers MUST safeguard the following secrets:
+
+* One or more secrets to verify and decrypt self-encoded access tokens (where applicable)
+* API credentials for authorization server or database server to verify lookup access tokens
+
+Authorization servers MUST safeguard the following secrets:
+
+* One or more secrets to generate self-encoded client tokens (where applicable)
+* One or more secrets to generate self-encoded access tokens (where applicable)
+
+Authorization servers MUST safeguard the following confidential information:
+
+* Client registration information
+* Hashes for lookup tokens (where applicable)
+* Granted permissions
+
 ## Token management, origins, and paths
 
 Applications MUST keep track of where access tokens should be used, to avoid
 accidentally disclosing an access token to an unrelated resource.
-This means all tokens MUST be associated with the origin (scheme, host, and port)
+This means all access tokens MUST be associated with the origin (scheme, host, and port)
 of the resource with which they are used.
 
 Within an origin, access tokens SHOULD be associated to a path, so the application
@@ -1207,25 +1705,25 @@ short validity period. The client may refresh the access tokens using the
 [Exchange](#exchange) API to continue accesing the resource.
 
 When using lookup tokens,
-the resource server can revoke the access tokens granted to any
+the authorization server can revoke the access tokens granted to any
 application by deleting tokens or setting their expiration time to
 zero.
 
-When using self-encoded tokens, revocation is not directly possible
+When using self-encoded tokens, immediate revocation is not possible
 since the tokens are verified by a cryptographic key and not by
 looking up anything in a database or remote server. This is because
 people who use self-encoded tokens do it with the intent to avoid such
 lookups on every request.
 
-In OAuth 2.0, refresh tokens are used as
-a workaround, essentially allowing self-encoded tokens to be used for
+Authorization servers using short duration self-encoded access tokens may
+enable long-term use with refresh tokens. This works by
+allowing self-encoded tokens to be used for
 a limited time without a database lookup, and then a more occasional
 use of the refresh token (with a database lookup) to request a new
 access token to be issued. The use of the refresh token provides the
 opportunity to revoke access by refusing to issue a new access token.
 
-In Webauthz, each client has its own client token which is used to
-authorize the refresh of an access token. The [exchange](#exchange) API
+The [exchange](#exchange) API
 allows the client to exchange an old access token for a new access token
 by providing the old access token. The authorization server may limit the
 number of times a client refreshes a particular access token, or it may
@@ -1234,28 +1732,41 @@ may not be refreshed. These limits may be stored in the access token
 (if it is self-encoded) or in the corresponding record (when using database
 lookups) or in a separate underlying permission.
 
-An implementation may limit the validity period of a token
-and require the application to obtain a replacement token at the end of
-that validity period. This is indicated by the `access_token_max_seconds` attribute
-provided to the application in the [exchange](#exchange) response.
+An authorization server informs client applications of the access token
+duration using the `access_token_max_seconds` attribute
+in the [exchange](#exchange) response.
 
-Where an exchange response includes `access_token_max_seconds`, the application MAY
-repeat the exchange step to obtain a new access token. The authorization
+Where an exchange response includes `refresh_token` and `refresh_token_max_seconds`,
+the application may use the refresh token to refresh the access token. A single
+refresh token may be used multiple times until a new one is returned in an exchange
+response. A refresh token corresponds to a specific access token or its underlying
+permission and is not valid for refreshing any other access tokens.
+
+Applications SHOULD avoid making a resource
+request with the `access_token` after the expiration date computed with `access_token_max_seconds`
+until they have refreshed the access token.
+
+An application MAY pre-emptively refresh the access token before the
+`access_token_max_seconds` have passed.
+
+An application may refresh an expired access token any time before the refresh token
+expires. If the refresh token expires and the application has not yet obtained a
+replacement refresh token, the application must request the access again from the user.
+
+The authorization
 server MAY refuse to issue a new access token until the `access_token`
 expires, or within a window of time
 around the access token expiration date to allow for clock difference and a little
 planning to avoid service interruptions.
 
-Applications SHOULD avoid making a resource
-request with the `access_token` after the expiration date computed with `access_token_max_seconds`.
-
-An application MAY pre-emptively refresh the access token before the
-`access_token_max_seconds` have passed.
-
 To obtain a new access token, an application makes an [exchange](#exchange)
 request to the authorization server with the `access_token`
 instead of the `grant_token`. The [exchange](#exchange) request
-MUST include an `Authorization` header with the application's client token.
+MUST include an `Authorization` header with the refresh token.
+
+This means a client application could delegate the access to a subcomponent by sharing
+the access token and refresh token, while preventing the subcomponent from requesting
+new permissions by not sharing the client token with the subcomponent.
 
 The new access token MAY have different scopes or permissions than the prior access token.
 
@@ -1301,20 +1812,54 @@ to access.
 This is all specific to the resource server and does not affect the
 protocol.
 
-## Access control in application
+## Multi-user applications
 
-Because an authorization server is likely to associate a specific
-user with a token, applications that serve multiple users MUST store their
-access tokens separately for each user. For example, a mobile or desktop
-application requesting access to a resource would store any obtained access
-tokens in a per-user directory, NOT a system-wide directory, so that if
-the OS user changes, then requests will use tokens granted to the current user
-and not any other user. A web application would associate all stored tokens
-with the user who obtained them, and would ensure that it includes the user id
-as a criteria when searching tokens.
+A multi-user client application MUST store all information received from
+the exchange API in a per-user storage area unless the access is intended
+to be shared among multiple users.
+
+A `client_token` and corresponding
+`refresh_token` represent the client application itself and MAY be shared
+among all users of a web application, while a desktop or mobile application
+typically runs as a specific user and SHOULD store the `client_token` and
+corresponding `refresh_token` in the user's storage area as opposed to a
+shared system-wide storage on the local system.
+
+An `access_token` and corresponding
+`refresh_token` MUST be stored in a per-user storage area unless the
+access is intended to be shared among multiple users. A client application
+SHOULD clearly inform users when such sharing will take place.
+
+Client applications MUST search for tokens in a per-user storage area
+for the current user unless the token is intended for sharing and is stored
+in a shared storage area.
+
+To illustrate the problem that could happen if client applications do NOT
+store all tokens separately for each user, consider the following sequence
+in which Bob accidentally gets access to a resource belonging to Alice:
+
+1. Alice attempts to use resource R with the client application
+2. The client application redirects Alice to the authorization server
+3. Alice signs in at the authorization server and grants permission for R
+4. The client application stores the access token in a shared storage location (INSECURE STEP)
+5. Bob attempts to use resource R with the client application
+6. The client application finds the access token and uses it (SECURITY FAULT)
+
+However, when a client application stores access tokens separately for each
+user, the security issue is resolved and Bob cannot access a resource
+belonging to Alice:
+
+1. Alice attempts to use resource R with the client application
+2. The client application redirects Alice to the authorization server
+3. Alice signs in at the authorization server and grants permission for R
+4. The client application stores the access token in Alice's token storage location (OK)
+5. Bob attempts to use resource R with the client application
+6. The client application redirects Alice to the authorization server
+7. Bob signs in at the authorization server, but doesn't have access to R
+8. The access request fails and Bob does not get access to R (OK)
 
 The application user id does NOT need to match the authorization server user
-id. The simple rule is that tokens obtained by the current user must only be
+id. The simple rule is that tokens obtained by the current user MUST only be
 usable by the current user, unless the application has a specific need.
 For example, an administrator obtaining a token for the application
 that is intended to be used for auto-configuration with a remote system, or for
@@ -1330,7 +1875,10 @@ it might not be obvious which user should be assigned the token -- is it the
 user who made the request, or the user who received the access token?
 
 Applications SHOULD ensure that the same user is present in both steps,
-to avoid confusion.
+to avoid confusion. This can be done by storing the current user id with
+the request information when initiating the request. Later, when the user
+returns from the authorization server, the application can check that it's
+the same user that initiated the request.
 
 ## Temporary elevated privileges
 
@@ -1357,48 +1905,47 @@ work hours compared to non-work hours.
 > the method presented above only requires additional implementation in the
 > authorization server and is usable with any Webauthz-compatible resource server.
 
-## Domain verification
+## Client application types
 
-The authorization server SHOULD require domain verification for the
-`client_domain`.  The verification is currently out of scope for this specification,
-but it could be done automatically via a DNS challenge in the response or
-using the `redirect` feature to prompt the administrator to complete a DNS challenge
-interactively.
+A Webauthz client application could be a web, mobile, or desktop application.
 
-Domain verification does not make sense for all clients. For example, a client
-application that is a mobile or desktop application may not have an associated domain
-at all. In that case, the client MUST NOT provide a `client_domain` value and
-the authorization server SHOULD allow the client registration without the `client_domain`
-value.
+The `grant_redirect_uri` value is used to redirect users from the authorization
+server's access request prompt back to the client application.
 
-However, a client application may be a web application and in this case, domain
-verification adds security because it prevents other clients that are not in
-control of that domain from masquerading as a legitimate client when asking
-users for permission to access their resources.
+For web applications, this is a URL that points back to the same web
+application. The client origin indicates the scheme, host, and port on which
+the web application is listening for requests.
 
-Unfortunately, domain verification does NOT prevent malicious client applications
-from tricking users with similar-looking domain names.
+For mobile and desktop applications, this is a URL that points to a locally
+installed application. The client origin indicates the scheme, host,
+and port which the user agent will recognize and open the corresponding
+application. Some user agents allow multiple applications to be registered
+for the same origin and prompt the user to select one. Others will defer to
+the operating system which would implement the same capability.
 
-One way to stop
-such malicious clients is for authorization servers to require an interactive
-client registration process and perform a thorough identity and background check
-for new client applications.
+For example, a client origin `https://example.com` could be a web appplication.
+It could also be a mobile or desktop application that is registered to open
+when a user visits any page under `https://example.com`, and the full URL
+would be provided to the application when it opens. This means millions of
+people could be running the example application on their mobile or desktop
+devices, and the same origin is shared by millions of different client applications.
 
-Another way to stop such malicious clients is to have two tiers of client
-registration: automatic and verified. Automatic client registration would be allowed,
-and clients would be marked as unverified. Unverified clients would be limited in the
-permissions the authorization server would grant for any access request. Verified
-clients would be eligible for additnal permissions in access requests.
-
-These approaches are optional for authorization servers to implement.
+Because the authorization server cannot distinguish between these client types
+based on the client origin value, and because multiple client applications running
+on behalf of different users could be using the same client origin value,
+an authorization server MUST NOT limit the use of a client origin to a single client
+and MUST NOT assume that clients using the same client origin belong to the same
+user or administrator. That is, the client id is the ONLY value suitable for
+distinguishing different clients, and the client token is the ONLY value suitable
+for authenticating a client.
 
 # Differences from OAuth 2.0
 
-## Discovery
+## Discovery mechanism
 
 The OAuth 2.0 specification leaves it to application developers to
 know where to request access tokens for the resource. This is
-reasoanble, because in practice, application developers do write
+reasonable, because in practice, application developers do write
 code to access a specific API, and the documentation would indicate
 where to request access tokens, where to register clients,
 etc. But we can do it a little better.
@@ -1433,10 +1980,10 @@ five steps:
    authorization server to obtain a `client_id` and `client_token`
 
 2. Request. The client redirects the user to the authorization server
-   with an access request; the request identifies the `client_id` and
-   specifies the requested access `scope` for an authorization `realm`
+   with an access request for a given `realm` and `scope`
 
-3. Prompt. The authorization server prompts the user to allow or deny the request
+3. Prompt. The authorization server authenticates the user and then
+   prompts the user to allow or deny the request
 
 4. Grant. The authorization server redirects the user to the client with a temporary
    `grant_token` ("authorization code" in OAuth 2.0)
@@ -1507,6 +2054,30 @@ application information to the user. While application privacy is not
 needed in every deployment, and applies only to non-users of the application,
 the ones that need it will be satisfied by this feature.
 
+## Request step does not specify state parameter
+
+In OAuth 2.0, an application must generate a `state` value and include
+it as a query parameter when redirecting the user to the authorization
+server. This both identifies the request to the client and acts as a
+CSRF token.
+
+In Webauthz, the authorization server generates the `state` value and
+includes it in the response of the request API. The authorization server
+includes the same `state` value in as a query parameter when redirecting
+the user to the client application's `grant_redirect_uri`. The client
+application MUST check that the query parameter is the expected value.
+
+In Webauthz, a client application SHOULD include its own CSRF token in the
+`grant_redirect_uri`. When user is redirected to that location, the
+client application SHOULD check that the CSRF token matches the expected
+value. However, since the `state` value can be used for both purposes,
+this is not strictly required.
+
+Moving the generation of the `state` value to the authorization server
+relieves the client application of the responsibility to generate unique
+random values in the protocol, simplifying the implementation of Webauthz
+client libraries and applications.
+
 ## Exchange step always requires client authentication
 
 In OAuth 2.0, the access token request may be "authenticated"
@@ -1515,7 +2086,9 @@ has previously registered and obtained credentials to use with
 the authorization server.
 
 In Webauthz, client registration is mandatory and cannot
-be skipped, and the exchange step requires client authentication.
+be skipped, and the exchange step requires client authentication
+via the client token (for exchanging grant tokens) or a refresh
+token (for exchanging access tokens or client tokens).
 
 This means possession of a grant token is not sufficient to obtain
 an access token -- the application's client token is also required
